@@ -13,7 +13,7 @@ except Exception:
     st.error("⚠️ Error: No se configuraron los Secrets en Streamlit.")
     st.stop()
 
-# Configurar el modelo (CAMBIADO A 1.5 PARA EVITAR ERRORES DE CUOTA)
+# Configurar el modelo (Usamos 1.5-flash para evitar bloqueos de cuota)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
 st.title("📟 Eterna: Conexión Privada")
@@ -32,6 +32,7 @@ if prompt := st.chat_input("Escríbele a Eterna..."):
         st.markdown(prompt)
 
     try:
+        # Aquí combinamos la personalidad con el historial para que siempre sepa quién es
         contexto = f"Instrucciones de personalidad: {personalidad}\n\n"
         historial = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
         
@@ -41,7 +42,4 @@ if prompt := st.chat_input("Escríbele a Eterna..."):
             st.markdown(response.text)
         st.session_state.messages.append({"role": "assistant", "content": response.text})
     except Exception as e:
-        st.error(f"Hubo un problema en la conexión: {e}") la memoria
-            st.session_state.messages.append({"role": "assistant", "content": full_response})
-        except Exception as e:
-            st.error(f"Hubo un problema en la conexión: {e}")
+        st.error(f"Hubo un problema en la conexión: {e}")
