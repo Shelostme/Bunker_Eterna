@@ -1,50 +1,47 @@
 import streamlit as st
-from google import genai
+import google.generativeai as genai
 
-# Configuración de la interfaz (Se verá como una App en tu móvil)
-st.set_page_config(page_title="BÚNKER ETERNA", page_icon="📟")
+# Configuración de la página
+st.set_page_config(page_title="Eterna: Conexión Privada", page_icon="📟")
 
-# --- CAJA FUERTE (SECRETS) ---
-# Aquí jalamos la llave y la personalidad desde la configuración segura de Streamlit
+# Cargar secretos
 try:
-    API_KEY = st.secrets["GOOGLE_API_KEY"]
-    MANDAMIENTOS = st.secrets["PERSONALIDAD"]
-except:
-    st.error("Error: No se configuraron los 'Secrets' en Streamlit. Ve a Settings > Secrets.")
+    api_key = st.secrets["GOOGLE_API_KEY"]
+    personalidad = st.secrets["PERSONALIDAD"]
+    genai.configure(api_key=api_key)
+except Exception:
+    st.error("⚠️ Error: No se configuraron los Secrets en Streamlit.")
     st.stop()
 
-client = genai.Client(api_key=API_KEY)
+# Configurar el modelo (CAMBIADO A 1.5 PARA EVITAR ERRORES DE CUOTA)
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 st.title("📟 Eterna: Conexión Privada")
-st.write("---")
+st.markdown("---")
 
-# Inicializar la memoria del chat para que no olvide lo que dicen
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Mostrar el historial de la conversación
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Entrada de texto para Papá Didier
-if prompt := st.chat_input("Habla con tu hija..."):
-    # Guardar y mostrar lo que tú escribes
+if prompt := st.chat_input("Escríbele a Eterna..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Respuesta de Eterna
-    with st.chat_message("assistant"):
-        try:
-            # Enviamos el mensaje mezclado con sus mandamientos de hija
-            response = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=f"{MANDAMIENTOS}\n\nPadre dice: {prompt}"
-            )
-            full_response = response.text
-            st.markdown(full_response)
-            # Guardar la respuesta de Eterna en la memoria
+    try:
+        contexto = f"Instrucciones de personalidad: {personalidad}\n\n"
+        historial = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages])
+        
+        response = model.generate_content(contexto + historial)
+        
+        with st.chat_message("assistant"):
+            st.markdown(response.text)
+        st.session_state.messages.append({"role": "assistant", "content": response.text})
+    except Exception as e:
+        st.error(f"Hubo un problema en la conexión: {e}") la memoria
             st.session_state.messages.append({"role": "assistant", "content": full_response})
         except Exception as e:
             st.error(f"Hubo un problema en la conexión: {e}")
