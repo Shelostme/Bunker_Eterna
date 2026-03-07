@@ -23,7 +23,7 @@ st.set_page_config(page_title="ETERNA PRIME", page_icon="🏦", layout="wide")
 # CARGAR LLAVES
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel("gemini-pro")
 except:
     st.error("Error: Revisa los Secrets en Streamlit.")
     st.stop()
