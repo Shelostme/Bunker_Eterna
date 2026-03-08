@@ -21,7 +21,10 @@ st.set_page_config(page_title="ETERNA", layout="wide")
 st.markdown("<style>body { background-color: #0e1117; color: #00ff00; }</style>", unsafe_allow_html=True)
 
 # ---------- CLIENTE IA (google-genai) ----------
-client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
+client = genai.Client(
+    api_key=st.secrets["GOOGLE_API_KEY"],
+    http_options={'base_url': 'https://generativelanguage.googleapis.com/v1'}
+)
 
 # ---------- MEMORIA SQLITE (HISTORIAL) ----------
 @st.cache_resource
