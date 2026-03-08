@@ -1,3 +1,5 @@
+import requests
+import json
 import streamlit as st
 from google import genai
 from google.genai import types
@@ -45,7 +47,7 @@ def get_db():
 conn = get_db()
 
 # ---------- MEMORIA VECTORIAL CON FAISS ----------
-dimension = 768  # text-embedding-004 usa 768 dimensiones
+dimension = 768  # embedding-001 usa 768 dimensiones
 index_path = 'faiss.index'
 
 @st.cache_resource
@@ -59,12 +61,27 @@ def init_faiss():
 index = init_faiss()
 
 def obtener_embedding(texto):
-    """Obtiene embedding desde la API de Google."""
-    response = client.models.embed_content(
-        model="embedding-001",
-        contents=[texto]
-    )
-    return response.embeddings[0].values
+    """Obtiene embedding usando la API REST de Google directamente (v1)."""
+    url = f"https://generativelanguage.googleapis.com/v1/models/embedding-001:embedContent?key={st.secrets['GOOGLE_API_KEY']}"
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "model": "models/embedding-001",
+        "content": {
+            "parts": [{"text": texto}]
+        }
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code == 200:
+            result = response.json()
+            return result['embedding']['values']
+        else:
+            st.error(f"Error en embedding (código {response.status_code}): {response.text}")
+            # Devuelve un vector de ceros como fallback (dimensión 768)
+            return [0.0] * 768
+    except Exception as e:
+        st.error(f"Excepción al obtener embedding: {e}")
+        return [0.0] * 768
 
 def guardar_embedding(texto):
     """Guarda el texto y su embedding en FAISS y SQLite."""
