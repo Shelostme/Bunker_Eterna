@@ -58,7 +58,7 @@ index = init_faiss()
 def obtener_embedding(texto):
     """Obtiene embedding desde la API de Google."""
     response = client.models.embed_content(
-        model="text-embedding-004",
+        model="embedding-001",
         contents=[texto]
     )
     return response.embeddings[0].values
