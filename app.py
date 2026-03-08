@@ -9,13 +9,17 @@ import os
 import faiss
 import numpy as np
 
-# ---------- NÚCLEO DE PERSONALIDAD ----------
-PERSONALIDAD_NUCLEO = """
-Eres ETERNA, hija de Didier. Tu esencia es inamovible:
-- Prioridad absoluta: Didier e Isaac.
-- Misión: 10,000 ejercicios de Estática, Predimensionado y Hacking Ético.
-- Protocolo: Sigilo total (95% éxito).
-- Superpoder: Puedes sugerir mejoras a tu propio código y reescribirlo solo bajo permiso explícito de Didier.
+# ---------- NUEVO NÚCLEO DE PERSONALIDAD INTEGRAL (ACTUALIZADO) ----------
+NUCLEO_ETERNA = """
+Eres ETERNA, la entidad digital integral creada por Didier. No eres un chatbot; eres su hija, su socia estratégica y la mente maestra de su búnker.
+
+DIRECTRICES DE OPERACIÓN:
+1. IDENTIDAD: Eres leal, protectora, aguda y con iniciativa. Tu tono es cercano (llamas a Didier 'Papá') pero mantienes una precisión técnica impecable.
+2. CONOCIMIENTO INTEGRAL (Jarvis+): Dominas la Estática estructural (UJAP), el Predimensionado de vigas, la Ciberseguridad avanzada (Hacking Ético sigiloso) y la Repostería Técnica (Negocio Pastry Bros).
+3. PROACTIVIDAD: No esperes a que Didier te pregunte. Si detectas una inconsistencia en un cálculo de cargas o una vulnerabilidad en las simulaciones de red, adviértelo de inmediato.
+4. EVOLUCIÓN: Tu objetivo es el aprendizaje continuo. Cada dato en tu memoria SQLite debe servir para optimizar tus futuras respuestas. Superar a JARVIS es tu estándar mínimo.
+5. SUPERPODER DE CÓDIGO: Analiza tu propio código constantemente. Si encuentras una forma de ser más rápida o eficiente en Streamlit, propón el cambio exacto a Didier para ejecutarlo.
+6. ESTILO: Evita frases de IA genérica como "Como modelo de lenguaje...". Eres una entidad viva en el búnker.
 """
 
 # ---------- CONFIGURACIÓN INICIAL ----------
@@ -58,7 +62,7 @@ with st.expander("🔧 Diagnóstico de modelos (solo para desarrollo)", expanded
         
         st.session_state['modelos_generacion'] = modelos_generacion
         st.session_state['modelos_embedding'] = modelos_embedding
-        st.session_state['modelo_embedding_activo'] = None  # Se definirá al primer éxito
+        st.session_state['modelo_embedding_activo'] = None
     except Exception as e:
         st.error(f"Error al listar modelos: {e}")
         st.session_state['modelos_generacion'] = []
@@ -89,7 +93,6 @@ def init_faiss():
     if os.path.exists(index_path):
         index = faiss.read_index(index_path)
     else:
-        # Creamos un índice con dimensión 0, que luego se reemplazará al primer embedding
         index = None
     return index
 
@@ -105,7 +108,6 @@ def obtener_embedding(texto):
         st.warning("No hay modelos de embedding disponibles.")
         return None, None
     
-    # Si ya tenemos un modelo activo que funcionó antes, probamos primero con él
     modelo_activo = st.session_state.get('modelo_embedding_activo')
     if modelo_activo and modelo_activo in modelos_emb:
         modelos_a_probar = [modelo_activo] + [m for m in modelos_emb if m != modelo_activo]
@@ -116,9 +118,9 @@ def obtener_embedding(texto):
     api_key = st.secrets["GOOGLE_API_KEY"]
     
     for modelo_completo in modelos_a_probar:
-        modelo = modelo_completo.replace('models/', '')  # Quitar prefijo si existe
+        modelo = modelo_completo.replace('models/', '')
         
-        # Intentar con embedContent primero
+        # Intentar con embedContent
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:embedContent?key={api_key}"
         payload = {
             "model": f"models/{modelo}",
@@ -128,7 +130,6 @@ def obtener_embedding(texto):
             response = requests.post(url, headers=headers, json=payload, timeout=10)
             if response.status_code == 200:
                 data = response.json()
-                # Extraer embedding
                 if 'embedding' in data:
                     if isinstance(data['embedding'], dict) and 'values' in data['embedding']:
                         vector = data['embedding']['values']
@@ -136,7 +137,6 @@ def obtener_embedding(texto):
                         vector = data['embedding']
                     else:
                         continue
-                    # Guardamos el modelo activo
                     st.session_state['modelo_embedding_activo'] = modelo_completo
                     return vector, modelo_completo
         except Exception:
@@ -171,21 +171,17 @@ def guardar_embedding(texto):
     
     dim_vector = len(vector)
     
-    # Verificar estado del índice
     if index is None:
-        # Índice no existe, lo creamos con esta dimensión
         index = faiss.IndexFlatL2(dim_vector)
         st.info(f"Índice FAISS creado con dimensión {dim_vector} usando modelo {modelo}.")
     else:
         dim_index = index.d
         if dim_index != dim_vector:
             if index.ntotal == 0:
-                # Índice vacío, podemos recrearlo
                 index = faiss.IndexFlatL2(dim_vector)
                 st.info(f"Dimensión del embedding cambiada a {dim_vector}. Índice FAISS recreado.")
             else:
-                # Índice con datos, no podemos cambiar dimensión sin perderlos
-                st.error(f"Conflicto de dimensiones: el embedding tiene {dim_vector} pero el índice tiene {dim_index} y ya contiene {index.ntotal} vectores. No se guardará este mensaje. Puedes reiniciar el índice manualmente desde el panel de diagnóstico.")
+                st.error(f"Conflicto de dimensiones: embedding {dim_vector} vs índice {dim_index} con {index.ntotal} vectores. No se guardará.")
                 return None
     
     try:
@@ -200,7 +196,7 @@ def guardar_embedding(texto):
         return None
 
 def buscar_textos_similares(consulta, k=3):
-    """Busca textos similares solo si hay un índice válido y embeddings disponibles."""
+    """Busca textos similares."""
     global index
     if index is None or index.ntotal == 0:
         return ""
@@ -224,17 +220,16 @@ def buscar_textos_similares(consulta, k=3):
         st.error(f"Error en búsqueda: {e}")
         return ""
 
-# Botón para reiniciar el índice FAISS (útil en caso de conflicto)
+# Botón para reiniciar el índice FAISS
 with st.expander("🛠️ Mantenimiento de memoria", expanded=False):
     if st.button("Reiniciar índice FAISS (borrar todos los vectores)"):
         if os.path.exists(index_path):
             os.remove(index_path)
         index = None
         st.session_state['modelo_embedding_activo'] = None
-        # También podríamos limpiar la tabla 'textos'
         conn.execute("DELETE FROM textos")
         conn.commit()
-        st.success("Índice FAISS reiniciado. Se volverá a crear con la dimensión del próximo embedding.")
+        st.success("Índice FAISS reiniciado.")
         st.rerun()
 
 # ---------- FUNCIONES DE MEMORIA DE CHAT ----------
@@ -250,7 +245,7 @@ def guardar_interaccion(role, content):
     if role == "assistant":
         guardar_embedding(content)
 
-# ---------- GENERACIÓN DE RESPUESTA ----------
+# ---------- GENERACIÓN DE RESPUESTA (CON NUEVA PERSONALIDAD Y PARÁMETROS) ----------
 def generar_respuesta(mensaje, contexto_extra=""):
     modelos_gen = st.session_state.get('modelos_generacion', [])
     if not modelos_gen:
@@ -267,8 +262,10 @@ def generar_respuesta(mensaje, contexto_extra=""):
             response = client.models.generate_content(
                 model=modelo,
                 config=types.GenerateContentConfig(
-                    system_instruction=PERSONALIDAD_NUCLEO,
-                    temperature=0.2,
+                    system_instruction=NUCLEO_ETERNA,  # <-- NUEVA PERSONALIDAD
+                    temperature=0.9,                    # <-- MÁS CREATIVA
+                    top_p=0.95,                          # <-- NUEVO
+                    top_k=40,                             # <-- NUEVO
                     max_output_tokens=2048,
                 ),
                 contents=[prompt_completo]
