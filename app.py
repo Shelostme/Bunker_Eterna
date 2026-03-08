@@ -32,9 +32,15 @@ with st.expander("🔧 Diagnóstico de modelos (solo para desarrollo)", expanded
         modelos = list(client.models.list())
         st.success(f"Se encontraron {len(modelos)} modelos.")
         
-        # Separar por tipo
-        modelos_generacion = [m.name for m in modelos if 'generateContent' in str(m.supported_actions) or 'gemini' in m.name]
-        modelos_embedding = [m.name for m in modelos if 'embedContent' in str(m.supported_actions) or 'embedding' in m.name]
+        modelos_generacion = []
+        modelos_embedding = []
+        for m in modelos:
+            name = m.name
+            actions = str(m.supported_actions) if hasattr(m, 'supported_actions') else ''
+            if 'generateContent' in actions or 'gemini' in name:
+                modelos_generacion.append(name)
+            if 'embedContent' in actions or 'embedding' in name:
+                modelos_embedding.append(name)
         
         st.write("*Modelos de generación (Gemini) disponibles:*")
         if modelos_generacion:
@@ -48,11 +54,11 @@ with st.expander("🔧 Diagnóstico de modelos (solo para desarrollo)", expanded
             for m in modelos_embedding:
                 st.code(m)
         else:
-            st.warning("No se encontraron modelos de embedding. La memoria a largo plazo (RAG) podría no funcionar.")
+            st.warning("No se encontraron modelos de embedding.")
         
-        # Guardar en session_state para uso posterior
         st.session_state['modelos_generacion'] = modelos_generacion
         st.session_state['modelos_embedding'] = modelos_embedding
+        st.session_state['modelo_embedding_activo'] = None  # Se definirá al primer éxito
     except Exception as e:
         st.error(f"Error al listar modelos: {e}")
         st.session_state['modelos_generacion'] = []
@@ -74,77 +80,116 @@ def get_db():
 
 conn = get_db()
 
-# ---------- MEMORIA VECTORIAL CON FAISS ----------
-dimension = 768  # Ajustable según el modelo de embedding
+# ---------- MEMORIA VECTORIAL CON FAISS (DIMENSIÓN VARIABLE) ----------
 index_path = 'faiss.index'
 
 @st.cache_resource
 def init_faiss():
+    """Inicializa el índice FAISS. Si existe, lo carga; si no, crea uno vacío con dimensión 0 (luego se ajustará)."""
     if os.path.exists(index_path):
         index = faiss.read_index(index_path)
     else:
-        index = faiss.IndexFlatL2(dimension)
+        # Creamos un índice con dimensión 0, que luego se reemplazará al primer embedding
+        index = None
     return index
 
 index = init_faiss()
 
 def obtener_embedding(texto):
     """
-    Obtiene embedding usando el primer modelo de embedding disponible.
-    Si no hay ninguno, retorna None.
+    Prueba todos los modelos de embedding disponibles hasta obtener uno exitoso.
+    Retorna el vector y el nombre del modelo usado, o (None, None) si todos fallan.
     """
     modelos_emb = st.session_state.get('modelos_embedding', [])
     if not modelos_emb:
-        return None
+        st.warning("No hay modelos de embedding disponibles.")
+        return None, None
     
-    # Tomamos el primer modelo de embedding de la lista
-    modelo = modelos_emb[0].replace('models/', '')  # Algunos nombres vienen con 'models/'
+    # Si ya tenemos un modelo activo que funcionó antes, probamos primero con él
+    modelo_activo = st.session_state.get('modelo_embedding_activo')
+    if modelo_activo and modelo_activo in modelos_emb:
+        modelos_a_probar = [modelo_activo] + [m for m in modelos_emb if m != modelo_activo]
+    else:
+        modelos_a_probar = modelos_emb
     
-    # Intentamos con el endpoint de embedContent
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:embedContent?key={st.secrets['GOOGLE_API_KEY']}"
     headers = {'Content-Type': 'application/json'}
-    payload = {
-        "model": f"models/{modelo}",
-        "content": {"parts": [{"text": texto}]}
-    }
+    api_key = st.secrets["GOOGLE_API_KEY"]
     
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            # Intentamos extraer el embedding de distintas formas
-            if 'embedding' in data:
-                if isinstance(data['embedding'], dict) and 'values' in data['embedding']:
-                    return data['embedding']['values']
-                elif isinstance(data['embedding'], list):
-                    return data['embedding']
-            return None
-        else:
-            # Si falla, probamos con el endpoint embedText
-            url_text = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:embedText?key={st.secrets['GOOGLE_API_KEY']}"
-            payload_text = {"text": texto}
+    for modelo_completo in modelos_a_probar:
+        modelo = modelo_completo.replace('models/', '')  # Quitar prefijo si existe
+        
+        # Intentar con embedContent primero
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:embedContent?key={api_key}"
+        payload = {
+            "model": f"models/{modelo}",
+            "content": {"parts": [{"text": texto}]}
+        }
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                # Extraer embedding
+                if 'embedding' in data:
+                    if isinstance(data['embedding'], dict) and 'values' in data['embedding']:
+                        vector = data['embedding']['values']
+                    elif isinstance(data['embedding'], list):
+                        vector = data['embedding']
+                    else:
+                        continue
+                    # Guardamos el modelo activo
+                    st.session_state['modelo_embedding_activo'] = modelo_completo
+                    return vector, modelo_completo
+        except Exception:
+            pass
+        
+        # Si falla, intentar con embedText
+        url_text = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:embedText?key={api_key}"
+        payload_text = {"text": texto}
+        try:
             response2 = requests.post(url_text, headers=headers, json=payload_text, timeout=10)
             if response2.status_code == 200:
                 data2 = response2.json()
                 if 'embedding' in data2:
-                    return data2['embedding']
-            return None
-    except Exception as e:
-        st.warning(f"Error obteniendo embedding: {e}")
-        return None
+                    vector = data2['embedding']
+                    st.session_state['modelo_embedding_activo'] = modelo_completo
+                    return vector, modelo_completo
+        except Exception:
+            pass
+    
+    st.warning("No se pudo obtener embedding con ningún modelo disponible.")
+    return None, None
 
 def guardar_embedding(texto):
-    """Guarda el texto y su embedding solo si se pudo obtener."""
-    emb = obtener_embedding(texto)
-    if emb is None:
+    """
+    Guarda el texto y su embedding. Si el índice no existe o la dimensión no coincide,
+    lo recrea automáticamente si está vacío. Si no está vacío, muestra error.
+    """
+    global index
+    vector, modelo = obtener_embedding(texto)
+    if vector is None:
         return None
+    
+    dim_vector = len(vector)
+    
+    # Verificar estado del índice
+    if index is None:
+        # Índice no existe, lo creamos con esta dimensión
+        index = faiss.IndexFlatL2(dim_vector)
+        st.info(f"Índice FAISS creado con dimensión {dim_vector} usando modelo {modelo}.")
+    else:
+        dim_index = index.d
+        if dim_index != dim_vector:
+            if index.ntotal == 0:
+                # Índice vacío, podemos recrearlo
+                index = faiss.IndexFlatL2(dim_vector)
+                st.info(f"Dimensión del embedding cambiada a {dim_vector}. Índice FAISS recreado.")
+            else:
+                # Índice con datos, no podemos cambiar dimensión sin perderlos
+                st.error(f"Conflicto de dimensiones: el embedding tiene {dim_vector} pero el índice tiene {dim_index} y ya contiene {index.ntotal} vectores. No se guardará este mensaje. Puedes reiniciar el índice manualmente desde el panel de diagnóstico.")
+                return None
+    
     try:
-        # Ajustar dimensión si es necesario
-        if len(emb) != dimension:
-            st.warning(f"Dimensión del embedding ({len(emb)}) no coincide con la esperada ({dimension}). Se ajustará.")
-            # Si no coincide, podríamos recrear el índice, pero por ahora no guardamos
-            return None
-        index.add(np.array([emb]).astype('float32'))
+        index.add(np.array([vector]).astype('float32'))
         faiss.write_index(index, index_path)
         c = conn.cursor()
         c.execute("INSERT INTO textos (contenido) VALUES (?)", (texto,))
@@ -155,12 +200,17 @@ def guardar_embedding(texto):
         return None
 
 def buscar_textos_similares(consulta, k=3):
-    """Busca textos similares solo si hay embeddings disponibles."""
-    emb_consulta = obtener_embedding(consulta)
-    if emb_consulta is None:
+    """Busca textos similares solo si hay un índice válido y embeddings disponibles."""
+    global index
+    if index is None or index.ntotal == 0:
         return ""
+    
+    vector, _ = obtener_embedding(consulta)
+    if vector is None:
+        return ""
+    
     try:
-        D, I = index.search(np.array([emb_consulta]).astype('float32'), k)
+        D, I = index.search(np.array([vector]).astype('float32'), k)
         textos = []
         c = conn.cursor()
         for idx in I[0]:
@@ -173,6 +223,19 @@ def buscar_textos_similares(consulta, k=3):
     except Exception as e:
         st.error(f"Error en búsqueda: {e}")
         return ""
+
+# Botón para reiniciar el índice FAISS (útil en caso de conflicto)
+with st.expander("🛠️ Mantenimiento de memoria", expanded=False):
+    if st.button("Reiniciar índice FAISS (borrar todos los vectores)"):
+        if os.path.exists(index_path):
+            os.remove(index_path)
+        index = None
+        st.session_state['modelo_embedding_activo'] = None
+        # También podríamos limpiar la tabla 'textos'
+        conn.execute("DELETE FROM textos")
+        conn.commit()
+        st.success("Índice FAISS reiniciado. Se volverá a crear con la dimensión del próximo embedding.")
+        st.rerun()
 
 # ---------- FUNCIONES DE MEMORIA DE CHAT ----------
 def guardar_interaccion(role, content):
@@ -194,7 +257,6 @@ def generar_respuesta(mensaje, contexto_extra=""):
         return "Error: No hay modelos de generación disponibles. Verifica tu API key."
     
     for modelo_completo in modelos_gen:
-        # Extraer nombre simple (puede venir como "models/gemini-1.5-flash")
         modelo = modelo_completo.replace('models/', '')
         try:
             if contexto_extra:
