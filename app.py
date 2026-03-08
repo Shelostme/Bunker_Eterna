@@ -23,10 +23,7 @@ st.set_page_config(page_title="ETERNA", layout="wide")
 st.markdown("<style>body { background-color: #0e1117; color: #00ff00; }</style>", unsafe_allow_html=True)
 
 # ---------- CLIENTE IA (google-genai) ----------
-client = genai.Client(
-    api_key=st.secrets["GOOGLE_API_KEY"],
-    http_options={'base_url': 'https://generativelanguage.googleapis.com/v1'}
-)
+client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
 
 # ---------- MEMORIA SQLITE (HISTORIAL) ----------
 @st.cache_resource
@@ -47,7 +44,7 @@ def get_db():
 conn = get_db()
 
 # ---------- MEMORIA VECTORIAL CON FAISS ----------
-dimension = 768  # embedding-001 usa 768 dimensiones
+dimension = 768  # La mayoría de los modelos de embedding usan 768
 index_path = 'faiss.index'
 
 @st.cache_resource
@@ -61,62 +58,132 @@ def init_faiss():
 index = init_faiss()
 
 def obtener_embedding(texto):
-    """Obtiene embedding usando la API REST de Google directamente (v1)."""
-    url = f"https://generativelanguage.googleapis.com/v1/models/embedding-001:embedContent?key={st.secrets['GOOGLE_API_KEY']}"
+    """
+    Obtiene un vector de embedding usando varios endpoints de la API de Google.
+    Si todos fallan, devuelve un vector de ceros y registra una advertencia.
+    """
+    api_key = st.secrets["GOOGLE_API_KEY"]
+    
+    # Lista de (url, payload_builder) para probar en orden
+    endpoints = [
+        # Intento 1: v1beta embedContent (formato con "content")
+        (
+            f"https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key={api_key}",
+            lambda t: {
+                "model": "models/embedding-001",
+                "content": {"parts": [{"text": t}]}
+            }
+        ),
+        # Intento 2: v1 embedText (formato más simple)
+        (
+            f"https://generativelanguage.googleapis.com/v1/models/embedding-001:embedText?key={api_key}",
+            lambda t: {"text": t}
+        ),
+        # Intento 3: v1beta embedText (por si acaso)
+        (
+            f"https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedText?key={api_key}",
+            lambda t: {"text": t}
+        ),
+    ]
+    
     headers = {'Content-Type': 'application/json'}
-    payload = {
-        "model": "models/embedding-001",
-        "content": {
-            "parts": [{"text": texto}]
-        }
-    }
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        if response.status_code == 200:
-            result = response.json()
-            return result['embedding']['values']
-        else:
-            st.error(f"Error en embedding (código {response.status_code}): {response.text}")
-            # Devuelve un vector de ceros como fallback (dimensión 768)
-            return [0.0] * 768
-    except Exception as e:
-        st.error(f"Excepción al obtener embedding: {e}")
-        return [0.0] * 768
+    
+    for url, build_payload in endpoints:
+        try:
+            payload = build_payload(texto)
+            response = requests.post(url, headers=headers, json=payload, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                # La estructura puede variar: 'embedding' -> 'value' o directamente 'embedding'
+                if 'embedding' in data:
+                    if 'value' in data['embedding']:
+                        return data['embedding']['value']
+                    elif isinstance(data['embedding'], list):
+                        return data['embedding']
+                elif 'embedding' in data:  # Algunas respuestas anidan diferente
+                    return data['embedding']
+                else:
+                    # Fallback: devolvemos ceros
+                    st.warning("Estructura de respuesta de embedding no reconocida.")
+                    return [0.0] * dimension
+            else:
+                # Si el error es 404, probamos el siguiente endpoint
+                if response.status_code == 404:
+                    continue
+                else:
+                    # Otro error (ej. 429, 500) lo reportamos pero no detenemos
+                    st.warning(f"Error en embedding (código {response.status_code}): {response.text[:100]}")
+                    return [0.0] * dimension
+        except Exception as e:
+            st.warning(f"Excepción en endpoint {url}: {e}")
+            continue
+    
+    # Si todos los endpoints fallaron
+    st.warning("No se pudo obtener embedding de la API. Se usará vector de ceros.")
+    return [0.0] * dimension
+
+def es_vector_valido(vec):
+    """Verifica que el vector no sea todo ceros (o muy cercano)."""
+    return not np.allclose(vec, 0.0, atol=1e-6)
 
 def guardar_embedding(texto):
-    """Guarda el texto y su embedding en FAISS y SQLite."""
+    """
+    Guarda el texto y su embedding en FAISS y SQLite solo si el embedding es válido.
+    """
     emb = obtener_embedding(texto)
-    index.add(np.array([emb]).astype('float32'))
-    faiss.write_index(index, index_path)
-    c = conn.cursor()
-    c.execute("INSERT INTO textos (contenido) VALUES (?)", (texto,))
-    conn.commit()
-    return c.lastrowid
+    if not es_vector_valido(emb):
+        st.warning("Embedding no válido, no se guardará en memoria a largo plazo.")
+        return None
+    
+    try:
+        index.add(np.array([emb]).astype('float32'))
+        faiss.write_index(index, index_path)
+        c = conn.cursor()
+        c.execute("INSERT INTO textos (contenido) VALUES (?)", (texto,))
+        conn.commit()
+        return c.lastrowid
+    except Exception as e:
+        st.error(f"Error al guardar embedding: {e}")
+        return None
 
 def buscar_textos_similares(consulta, k=3):
-    """Busca los k textos más similares a la consulta."""
+    """
+    Busca los k textos más similares a la consulta.
+    Si el embedding de consulta no es válido, retorna cadena vacía.
+    """
     emb_consulta = obtener_embedding(consulta)
-    D, I = index.search(np.array([emb_consulta]).astype('float32'), k)
-    textos = []
-    c = conn.cursor()
-    for idx in I[0]:
-        if idx != -1:
-            # FAISS índices base 0, SQLite IDs base 1
-            c.execute("SELECT contenido FROM textos WHERE id=?", (int(idx)+1,))
-            res = c.fetchone()
-            if res:
-                textos.append(res[0])
-    return "\n".join(textos)
+    if not es_vector_valido(emb_consulta):
+        return ""
+    
+    try:
+        D, I = index.search(np.array([emb_consulta]).astype('float32'), k)
+        textos = []
+        c = conn.cursor()
+        for idx in I[0]:
+            if idx != -1:
+                # FAISS índices base 0, SQLite IDs base 1
+                c.execute("SELECT contenido FROM textos WHERE id=?", (int(idx)+1,))
+                res = c.fetchone()
+                if res:
+                    textos.append(res[0])
+        return "\n".join(textos)
+    except Exception as e:
+        st.error(f"Error en búsqueda de textos similares: {e}")
+        return ""
 
 # ---------- FUNCIONES DE MEMORIA DE CHAT ----------
 def guardar_interaccion(role, content):
     ts = datetime.now().isoformat()
-    conn.execute("INSERT INTO memoria (timestamp, role, content) VALUES (?, ?, ?)",
-                 (ts, role, content))
-    conn.commit()
-    # Si es una respuesta de ETERNA, la guardamos también en memoria a largo plazo
+    try:
+        conn.execute("INSERT INTO memoria (timestamp, role, content) VALUES (?, ?, ?)",
+                     (ts, role, content))
+        conn.commit()
+    except Exception as e:
+        st.error(f"Error guardando en historial: {e}")
+    
+    # Si es una respuesta de ETERNA, intentamos guardarla en memoria a largo plazo
     if role == "assistant":
-        guardar_embedding(content)
+        guardar_embedding(content)  # Ya maneja errores internamente
 
 # ---------- GENERACIÓN DE RESPUESTA ----------
 def generar_respuesta(mensaje, contexto_extra=""):
