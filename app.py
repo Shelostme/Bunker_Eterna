@@ -23,8 +23,40 @@ st.set_page_config(page_title="ETERNA", layout="wide")
 st.markdown("<style>body { background-color: #0e1117; color: #00ff00; }</style>", unsafe_allow_html=True)
 
 # ---------- CLIENTE IA (google-genai) ----------
-# Usamos la configuración por defecto (ya no forzamos v1)
 client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
+
+# ========== DIAGNÓSTICO DE MODELOS DISPONIBLES ==========
+with st.expander("🔧 Diagnóstico de modelos (solo para desarrollo)", expanded=False):
+    st.write("Consultando modelos disponibles...")
+    try:
+        modelos = list(client.models.list())
+        st.success(f"Se encontraron {len(modelos)} modelos.")
+        
+        # Separar por tipo
+        modelos_generacion = [m.name for m in modelos if 'generateContent' in str(m.supported_actions) or 'gemini' in m.name]
+        modelos_embedding = [m.name for m in modelos if 'embedContent' in str(m.supported_actions) or 'embedding' in m.name]
+        
+        st.write("*Modelos de generación (Gemini) disponibles:*")
+        if modelos_generacion:
+            for m in modelos_generacion:
+                st.code(m)
+        else:
+            st.warning("No se encontraron modelos de generación.")
+        
+        st.write("*Modelos de embedding disponibles:*")
+        if modelos_embedding:
+            for m in modelos_embedding:
+                st.code(m)
+        else:
+            st.warning("No se encontraron modelos de embedding. La memoria a largo plazo (RAG) podría no funcionar.")
+        
+        # Guardar en session_state para uso posterior
+        st.session_state['modelos_generacion'] = modelos_generacion
+        st.session_state['modelos_embedding'] = modelos_embedding
+    except Exception as e:
+        st.error(f"Error al listar modelos: {e}")
+        st.session_state['modelos_generacion'] = []
+        st.session_state['modelos_embedding'] = []
 
 # ---------- MEMORIA SQLITE (HISTORIAL) ----------
 @st.cache_resource
@@ -43,8 +75,7 @@ def get_db():
 conn = get_db()
 
 # ---------- MEMORIA VECTORIAL CON FAISS ----------
-# gemini-embedding-001 usa 768 dimensiones (igual que los anteriores)
-dimension = 768
+dimension = 768  # Ajustable según el modelo de embedding
 index_path = 'faiss.index'
 
 @st.cache_resource
@@ -59,12 +90,21 @@ index = init_faiss()
 
 def obtener_embedding(texto):
     """
-    Obtiene embedding usando el modelo recomendado por Google: gemini-embedding-001
+    Obtiene embedding usando el primer modelo de embedding disponible.
+    Si no hay ninguno, retorna None.
     """
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key={st.secrets['GOOGLE_API_KEY']}"
+    modelos_emb = st.session_state.get('modelos_embedding', [])
+    if not modelos_emb:
+        return None
+    
+    # Tomamos el primer modelo de embedding de la lista
+    modelo = modelos_emb[0].replace('models/', '')  # Algunos nombres vienen con 'models/'
+    
+    # Intentamos con el endpoint de embedContent
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:embedContent?key={st.secrets['GOOGLE_API_KEY']}"
     headers = {'Content-Type': 'application/json'}
     payload = {
-        "model": "models/gemini-embedding-001",
+        "model": f"models/{modelo}",
         "content": {"parts": [{"text": texto}]}
     }
     
@@ -72,26 +112,38 @@ def obtener_embedding(texto):
         response = requests.post(url, headers=headers, json=payload, timeout=10)
         if response.status_code == 200:
             data = response.json()
-            # La respuesta tiene estructura: {"embedding": {"values": [0.1, 0.2, ...]}}
-            if 'embedding' in data and 'values' in data['embedding']:
-                return data['embedding']['values']
-            else:
-                st.warning("Estructura de respuesta inesperada")
-                return None
+            # Intentamos extraer el embedding de distintas formas
+            if 'embedding' in data:
+                if isinstance(data['embedding'], dict) and 'values' in data['embedding']:
+                    return data['embedding']['values']
+                elif isinstance(data['embedding'], list):
+                    return data['embedding']
+            return None
         else:
-            st.warning(f"Error en embedding (código {response.status_code})")
+            # Si falla, probamos con el endpoint embedText
+            url_text = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:embedText?key={st.secrets['GOOGLE_API_KEY']}"
+            payload_text = {"text": texto}
+            response2 = requests.post(url_text, headers=headers, json=payload_text, timeout=10)
+            if response2.status_code == 200:
+                data2 = response2.json()
+                if 'embedding' in data2:
+                    return data2['embedding']
             return None
     except Exception as e:
-        st.warning(f"Excepción al obtener embedding: {e}")
+        st.warning(f"Error obteniendo embedding: {e}")
         return None
 
 def guardar_embedding(texto):
-    """Guarda el texto y su embedding en FAISS y SQLite."""
+    """Guarda el texto y su embedding solo si se pudo obtener."""
     emb = obtener_embedding(texto)
     if emb is None:
         return None
-    
     try:
+        # Ajustar dimensión si es necesario
+        if len(emb) != dimension:
+            st.warning(f"Dimensión del embedding ({len(emb)}) no coincide con la esperada ({dimension}). Se ajustará.")
+            # Si no coincide, podríamos recrear el índice, pero por ahora no guardamos
+            return None
         index.add(np.array([emb]).astype('float32'))
         faiss.write_index(index, index_path)
         c = conn.cursor()
@@ -103,11 +155,10 @@ def guardar_embedding(texto):
         return None
 
 def buscar_textos_similares(consulta, k=3):
-    """Busca los k textos más similares a la consulta."""
+    """Busca textos similares solo si hay embeddings disponibles."""
     emb_consulta = obtener_embedding(consulta)
     if emb_consulta is None:
         return ""
-    
     try:
         D, I = index.search(np.array([emb_consulta]).astype('float32'), k)
         textos = []
@@ -138,13 +189,13 @@ def guardar_interaccion(role, content):
 
 # ---------- GENERACIÓN DE RESPUESTA ----------
 def generar_respuesta(mensaje, contexto_extra=""):
-    # Lista de modelos a probar (en orden de preferencia)
-    modelos = [
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
-    ]
+    modelos_gen = st.session_state.get('modelos_generacion', [])
+    if not modelos_gen:
+        return "Error: No hay modelos de generación disponibles. Verifica tu API key."
     
-    for modelo in modelos:
+    for modelo_completo in modelos_gen:
+        # Extraer nombre simple (puede venir como "models/gemini-1.5-flash")
+        modelo = modelo_completo.replace('models/', '')
         try:
             if contexto_extra:
                 prompt_completo = f"Contexto relevante:\n{contexto_extra}\n\nMensaje actual: {mensaje}"
@@ -162,12 +213,10 @@ def generar_respuesta(mensaje, contexto_extra=""):
             )
             return response.text
         except Exception as e:
-            if "404" in str(e):
-                continue
             st.warning(f"Error con modelo {modelo}: {e}")
             continue
     
-    return "Lo siento, tengo problemas de conexión. Intenta de nuevo."
+    return "Lo siento, no se pudo generar respuesta con ningún modelo disponible."
 
 # ---------- INTERFAZ DE CHAT ----------
 if "mensajes" not in st.session_state:
