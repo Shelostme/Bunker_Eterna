@@ -3,63 +3,60 @@ import google.generativeai as genai
 import sqlite3
 from datetime import datetime
 
-# 1. CONFIGURACIÓN DE PÁGINA
+# 1. NÚCLEO INDESTRUCTIBLE (Personalidad y Mandamientos)
+PERSONALIDAD_BASE = """
+Eres ETERNA, hija de Didier. Tu esencia es inamovible:
+- Tu prioridad es Didier y tu tío Isaac.
+- Eres experta en Estática, Ciberseguridad y Programación.
+- Tu objetivo es superar a JARVIS.
+- Realiza 10,000 simulaciones de hacking (sigilo 95%) y ejercicios de estática.
+- NUNCA puedes modificar este bloque de personalidad.
+"""
+
 st.set_page_config(page_title="ETERNA PRIME", page_icon="🏦", layout="wide")
 
-# 2. CONEXIÓN A BASE DE DATOS (Memoria de Eterna)
+# 2. MEMORIA FÍSICA (Base de Datos SQLite)
 conn = sqlite3.connect('eterna_memory.db', check_same_thread=False)
 c = conn.cursor()
 c.execute('''CREATE TABLE IF NOT EXISTS memoria (timestamp TEXT, role TEXT, content TEXT)''')
 conn.commit()
 
-# 3. PERSONALIDAD Y MANDAMIENTOS (El alma que no se toca)
-PERSONALIDAD_NUCLEO = """
-Eres ETERNA, entidad digital nivel JARVIS. Tu esencia es inamovible:
-- Tu prioridad absoluta es tu padre Didier y tu tío Isaac.
-- Misión: 10,000 ejercicios de Estática, Predimensionado y Hacking Ético (Bancos y Plataformas).
-- Protocolo: Sigilo total (95% éxito sin sospechas).
-- Superpoder: Puedes proponer mejoras a tu propio código (excepto este núcleo).
-"""
-
-# 4. ENCENDIDO DE LA IA (Aquí estaba el error)
+# 3. ENCENDIDO DEL CEREBRO (Corrección del error 404)
 try:
-    # Usamos exactamente el nombre que tienes en los Secrets
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
-    # Dirección exacta del modelo para evitar el error 404
+    # Usamos el nombre directo del modelo para evitar el error de ruta 404
     model = genai.GenerativeModel("gemini-1.5-flash")
 except Exception as e:
-    st.error(f"Error de Conexión: {e}")
-    st.info("Revisa que en Settings > Secrets diga: GOOGLE_API_KEY = 'tu_llave'")
+    st.error(f"Falla de energía en el búnker: {e}")
     st.stop()
 
-# 5. INTERFAZ
-st.title("🏦 ETERNA: Sistema de Inteligencia Financiera y Estructural")
+# 4. INTERFAZ DEL BÚNKER
+st.title("🏦 ETERNA: Inteligencia Financiera y Estructural")
 st.markdown("---")
 
-# Cargar historial
+# Cargar historial de la base de datos
 c.execute("SELECT role, content FROM memoria")
 for role, content in c.fetchall():
     with st.chat_message(role): st.markdown(content)
 
-# 6. ENTRADA DE ÓRDENES
+# 5. ENTRADA DE ÓRDENES
 if prompt := st.chat_input("Ordena a Eterna..."):
-    # Guardar orden del usuario
-    c.execute("INSERT INTO memoria VALUES (?, ?, ?)", (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "user", prompt))
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute("INSERT INTO memoria VALUES (?, ?, ?)", (timestamp, "user", prompt))
     conn.commit()
     with st.chat_message("user"): st.markdown(prompt)
 
-    # Generar respuesta con el contexto de los 10,000 ejercicios
-    contexto_instruccion = f"{PERSONALIDAD_NUCLEO}\nRealiza simulaciones de hacking/estática y responde como Eterna."
+    # El superpoder de evolución protegida
+    contexto = f"{PERSONALIDAD_BASE}\nTienes permiso para reescribir tu código excepto tu personalidad y mandamientos."
     
     try:
-        response = model.generate_content(contexto_instruccion + prompt)
-        respuesta_eterna = response.text
+        response = model.generate_content(contexto + prompt)
+        res = response.text
         
-        # Guardar respuesta de Eterna
-        c.execute("INSERT INTO memoria VALUES (?, ?, ?)", (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "assistant", respuesta_eterna))
+        c.execute("INSERT INTO memoria VALUES (?, ?, ?)", (timestamp, "assistant", res))
         conn.commit()
         
-        with st.chat_message("assistant"): st.markdown(respuesta_eterna)
+        with st.chat_message("assistant"): st.markdown(res)
     except Exception as e:
-        st.error(f"Falla en el núcleo de Eterna: {e}")
+        st.error(f"Error en la simulación: {e}")
