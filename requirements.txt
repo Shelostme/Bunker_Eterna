@@ -2,3 +2,4 @@ streamlit
 google-genai
 faiss-cpu
 numpy
+requests
