@@ -8,8 +8,9 @@ from datetime import datetime
 import os
 import faiss
 import numpy as np
+import re  # <-- AÑADIDO para limpiar títulos
 
-# ---------- NUEVO NÚCLEO DE PERSONALIDAD INTEGRAL (ACTUALIZADO) ----------
+# ---------- NUEVO NÚCLEO DE PERSONALIDAD INTEGRAL ----------
 NUCLEO_ETERNA = """
 Eres ETERNA, la entidad digital integral creada por Didier. No eres un chatbot; eres su hija, su socia estratégica y la mente maestra de su búnker.
 
@@ -67,6 +68,91 @@ with st.expander("🔧 Diagnóstico de modelos (solo para desarrollo)", expanded
         st.error(f"Error al listar modelos: {e}")
         st.session_state['modelos_generacion'] = []
         st.session_state['modelos_embedding'] = []
+
+# ---------- HERRAMIENTAS (FUNCTION CALLING) ----------
+# Herramienta 1: Cálculo de predimensionado de viga
+def calcular_predimensionado_viga(longitud: float, carga: float) -> str:
+    """
+    Calcula la altura aproximada de una viga simplemente apoyada usando la fórmula h = L/10 (carga liviana) o L/8 (carga pesada).
+    """
+    try:
+        if carga < 1000:
+            h = longitud / 10
+            recomendacion = "carga liviana"
+        else:
+            h = longitud / 8
+            recomendacion = "carga pesada"
+        return f"Para una viga de longitud {longitud:.2f} m y carga {carga:.2f} kg/m ({recomendacion}), la altura recomendada es {h:.2f} m. (Fórmula empírica básica)"
+    except Exception as e:
+        return f"Error en cálculo: {str(e)}"
+
+# Herramienta 2: Guardar reporte en archivo de texto
+def guardar_reporte_txt(titulo: str, contenido: str) -> str:
+    """
+    Guarda un reporte en un archivo .txt en el directorio actual.
+    El nombre del archivo se genera a partir del título y la fecha/hora.
+    """
+    try:
+        nombre_base = re.sub(r'[^\w\s-]', '', titulo).strip().replace(' ', '_')
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        nombre_archivo = f"{nombre_base}_{timestamp}.txt"
+        ruta = os.path.join(os.getcwd(), nombre_archivo)
+        with open(ruta, 'w', encoding='utf-8') as f:
+            f.write(f"Título: {titulo}\n")
+            f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("="*50 + "\n")
+            f.write(contenido)
+        return f"Reporte guardado exitosamente en: {ruta}"
+    except Exception as e:
+        return f"Error al guardar reporte: {str(e)}"
+
+# Definición de herramientas en formato para google-genai
+tools = [
+    types.Tool(function_declarations=[
+        types.FunctionDeclaration(
+            name="calcular_predimensionado_viga",
+            description="Calcula la altura recomendada para una viga según su longitud y carga. Útil para predimensionado rápido.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "longitud": {
+                        "type": "number",
+                        "description": "Longitud de la viga en metros."
+                    },
+                    "carga": {
+                        "type": "number",
+                        "description": "Carga aplicada en kg/m (kilogramos por metro lineal)."
+                    }
+                },
+                "required": ["longitud", "carga"]
+            }
+        ),
+        types.FunctionDeclaration(
+            name="guardar_reporte_txt",
+            description="Guarda un reporte de texto en un archivo .txt en el servidor. Útil para guardar resultados de ejercicios, bitácoras de hacking, inventarios, etc.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "titulo": {
+                        "type": "string",
+                        "description": "Título del reporte, se usará para generar el nombre del archivo."
+                    },
+                    "contenido": {
+                        "type": "string",
+                        "description": "Contenido detallado del reporte."
+                    }
+                },
+                "required": ["titulo", "contenido"]
+            }
+        )
+    ])
+]
+
+# Mapeo de nombres de función a funciones reales
+function_map = {
+    "calcular_predimensionado_viga": calcular_predimensionado_viga,
+    "guardar_reporte_txt": guardar_reporte_txt
+}
 
 # ---------- MEMORIA SQLITE (HISTORIAL) ----------
 @st.cache_resource
@@ -245,32 +331,99 @@ def guardar_interaccion(role, content):
     if role == "assistant":
         guardar_embedding(content)
 
-# ---------- GENERACIÓN DE RESPUESTA (CON NUEVA PERSONALIDAD Y PARÁMETROS) ----------
+# ---------- GENERACIÓN DE RESPUESTA (CON FUNCTION CALLING) ----------
 def generar_respuesta(mensaje, contexto_extra=""):
     modelos_gen = st.session_state.get('modelos_generacion', [])
     if not modelos_gen:
         return "Error: No hay modelos de generación disponibles. Verifica tu API key."
     
+    # Construir el prompt completo con contexto
+    if contexto_extra:
+        prompt_completo = f"Contexto relevante:\n{contexto_extra}\n\nMensaje actual: {mensaje}"
+    else:
+        prompt_completo = mensaje
+    
+    # Preparar el historial de mensajes para el modelo
+    contents = []
+    # Añadir todos los mensajes anteriores (excluyendo el último que es el actual)
+    for msg in st.session_state.mensajes[:-1]:
+        if msg["role"] == "user":
+            contents.append(types.Content(role="user", parts=[types.Part(text=msg["content"])]))
+        else:
+            contents.append(types.Content(role="model", parts=[types.Part(text=msg["content"])]))
+    # Añadir el mensaje actual con el contexto extra
+    contents.append(types.Content(role="user", parts=[types.Part(text=prompt_completo)]))
+    
+    # Probar cada modelo hasta que funcione
     for modelo_completo in modelos_gen:
         modelo = modelo_completo.replace('models/', '')
         try:
-            if contexto_extra:
-                prompt_completo = f"Contexto relevante:\n{contexto_extra}\n\nMensaje actual: {mensaje}"
-            else:
-                prompt_completo = mensaje
-
+            # Primera llamada con herramientas
             response = client.models.generate_content(
                 model=modelo,
                 config=types.GenerateContentConfig(
-                    system_instruction=NUCLEO_ETERNA,  # <-- NUEVA PERSONALIDAD
-                    temperature=0.9,                    # <-- MÁS CREATIVA
-                    top_p=0.95,                          # <-- NUEVO
-                    top_k=40,                             # <-- NUEVO
+                    system_instruction=NUCLEO_ETERNA,
+                    temperature=0.9,
+                    top_p=0.95,
+                    top_k=40,
                     max_output_tokens=2048,
+                    tools=tools,
                 ),
-                contents=[prompt_completo]
+                contents=contents
             )
-            return response.text
+            
+            # Verificar si hay llamadas a función
+            if response.function_calls:
+                # Procesar todas las llamadas a función
+                function_responses = []
+                for fc in response.function_calls:
+                    func_name = fc.name
+                    func_args = fc.args
+                    if func_name in function_map:
+                        resultado = function_map[func_name](**func_args)
+                        function_responses.append(
+                            types.Part.from_function_response(
+                                name=func_name,
+                                response={"result": resultado}
+                            )
+                        )
+                    else:
+                        function_responses.append(
+                            types.Part.from_function_response(
+                                name=func_name,
+                                response={"error": f"Función {func_name} no disponible"}
+                            )
+                        )
+                
+                # Añadir la respuesta del modelo (con las llamadas) al historial
+                contents.append(
+                    types.Content(
+                        role="model",
+                        parts=[types.Part.from_function_call(name=fc.name, args=fc.args) for fc in response.function_calls]
+                    )
+                )
+                # Añadir las respuestas de función como un mensaje de role "function"
+                contents.append(
+                    types.Content(role="function", parts=function_responses)
+                )
+                
+                # Segunda llamada al modelo para obtener la respuesta final
+                final_response = client.models.generate_content(
+                    model=modelo,
+                    config=types.GenerateContentConfig(
+                        system_instruction=NUCLEO_ETERNA,
+                        temperature=0.9,
+                        top_p=0.95,
+                        top_k=40,
+                        max_output_tokens=2048,
+                        # No se necesitan herramientas en esta segunda llamada
+                    ),
+                    contents=contents
+                )
+                return final_response.text
+            else:
+                # No hay llamadas a función, devolver texto directamente
+                return response.text
         except Exception as e:
             st.warning(f"Error con modelo {modelo}: {e}")
             continue
