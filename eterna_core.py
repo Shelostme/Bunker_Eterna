@@ -14,6 +14,11 @@ import subprocess
 import threading
 from google import genai
 from google.genai import types
+import logging
+
+# Configurar logging básico
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(_name_)
 
 # ---------- CONFIGURACIÓN DESDE VARIABLES DE ENTORNO ----------
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -56,6 +61,7 @@ def init_db():
                      completada INTEGER DEFAULT 0,
                      creada TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     conn.commit()
+    logger.info("Base de datos inicializada")
 
 init_db()
 
@@ -68,27 +74,27 @@ def init_faiss():
     global index
     if os.path.exists(index_path):
         index = faiss.read_index(index_path)
+        logger.info(f"Índice FAISS cargado con {index.ntotal} vectores, dimensión {index.d}")
     else:
         index = None
+        logger.info("No se encontró índice FAISS, se creará al primer embedding")
 
 init_faiss()
 
 # ---------- ESTADO PARA EMBEDDINGS (modelo activo) ----------
 modelo_embedding_activo = None
-modelos_embedding_cache = None  # Se llenará con una llamada a listar modelos
+modelos_embedding_cache = None
 embedding_lock = threading.Lock()
 
 def set_modelos_embedding(modelos):
     global modelos_embedding_cache
     modelos_embedding_cache = modelos
+    logger.info(f"Modelos de embedding actualizados: {modelos}")
 
 def obtener_embedding(texto):
-    """
-    Obtiene embedding usando el primer modelo disponible de la lista cacheada.
-    """
     global modelo_embedding_activo, modelos_embedding_cache
     if modelos_embedding_cache is None:
-        # Si no hay caché, no podemos obtener embedding (esto debería inicializarse antes)
+        logger.warning("No hay modelos de embedding en caché")
         return None
     
     with embedding_lock:
@@ -122,8 +128,10 @@ def obtener_embedding(texto):
                         continue
                     with embedding_lock:
                         modelo_embedding_activo = modelo_completo
+                    logger.info(f"Embedding obtenido con modelo {modelo}")
                     return vector
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Error con embedContent en {modelo}: {e}")
             pass
         
         # Si falla, intentar con embedText
@@ -137,16 +145,16 @@ def obtener_embedding(texto):
                     vector = data2['embedding']
                     with embedding_lock:
                         modelo_embedding_activo = modelo_completo
+                    logger.info(f"Embedding obtenido con modelo {modelo} (embedText)")
                     return vector
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Error con embedText en {modelo}: {e}")
             pass
     
+    logger.warning("No se pudo obtener embedding con ningún modelo")
     return None
 
 def guardar_embedding(texto):
-    """
-    Guarda el texto y su embedding en FAISS y SQLite.
-    """
     global index
     vector = obtener_embedding(texto)
     if vector is None:
@@ -157,19 +165,20 @@ def guardar_embedding(texto):
     with index_lock:
         if index is None:
             index = faiss.IndexFlatL2(dim_vector)
-            print(f"Índice FAISS creado con dimensión {dim_vector}")
+            logger.info(f"Índice FAISS creado con dimensión {dim_vector}")
         else:
             dim_index = index.d
             if dim_index != dim_vector:
                 if index.ntotal == 0:
                     index = faiss.IndexFlatL2(dim_vector)
-                    print(f"Dimensión del embedding cambiada a {dim_vector}. Índice FAISS recreado.")
+                    logger.info(f"Dimensión del embedding cambiada a {dim_vector}. Índice FAISS recreado.")
                 else:
-                    print(f"Conflicto de dimensiones: embedding {dim_vector} vs índice {dim_index} con {index.ntotal} vectores. No se guardará.")
+                    logger.error(f"Conflicto de dimensiones: embedding {dim_vector} vs índice {dim_index} con {index.ntotal} vectores. No se guardará.")
                     return None
         
         index.add(np.array([vector]).astype('float32'))
         faiss.write_index(index, index_path)
+        logger.info(f"Embedding guardado, ahora hay {index.ntotal} vectores")
     
     with db_lock:
         c = conn.cursor()
@@ -178,15 +187,14 @@ def guardar_embedding(texto):
         return c.lastrowid
 
 def buscar_textos_similares(consulta, k=3):
-    """
-    Busca los k textos más similares a la consulta.
-    """
     global index
     if index is None or index.ntotal == 0:
+        logger.info("Índice FAISS vacío, no se busca contexto")
         return ""
     
     vector = obtener_embedding(consulta)
     if vector is None:
+        logger.warning("No se pudo obtener embedding para la consulta")
         return ""
     
     with index_lock:
@@ -201,12 +209,10 @@ def buscar_textos_similares(consulta, k=3):
                 res = c.fetchone()
                 if res:
                     textos.append(res[0])
+    logger.info(f"Búsqueda devolvió {len(textos)} textos")
     return "\n".join(textos)
 
 def reiniciar_indice_faiss():
-    """
-    Elimina el índice FAISS y borra la tabla de textos.
-    """
     global index
     with index_lock:
         if os.path.exists(index_path):
@@ -215,9 +221,10 @@ def reiniciar_indice_faiss():
     with db_lock:
         conn.execute("DELETE FROM textos")
         conn.commit()
+    logger.info("Índice FAISS reiniciado")
     return "Índice FAISS reiniciado."
 
-# ---------- HERRAMIENTAS ----------
+# ---------- HERRAMIENTAS (sin cambios) ----------
 def calcular_predimensionado_viga(longitud: float, carga: float) -> str:
     try:
         if carga < 1000:
@@ -483,11 +490,54 @@ tools = [
     ])
 ]
 
+# ---------- VARIABLES PARA MODELOS DE GENERACIÓN ----------
+modelos_generacion_cache = None
+modelos_generacion_blacklist = set()
+
+def cargar_modelos_generacion():
+    global modelos_generacion_cache
+    try:
+        modelos = list(client.models.list())
+        modelos_gen = []
+        for m in modelos:
+            name = m.name
+            actions = str(m.supported_actions) if hasattr(m, 'supported_actions') else ''
+            if 'generateContent' in actions or 'gemini' in name.lower():
+                modelos_gen.append(name)
+        modelos_generacion_cache = modelos_gen
+        logger.info(f"Modelos de generación cargados: {modelos_gen}")
+        return modelos_gen
+    except Exception as e:
+        logger.error(f"Error al cargar modelos de generación: {e}")
+        # Fallback a modelos conocidos
+        modelos_generacion_cache = [
+            "models/gemini-1.5-pro",
+            "models/gemini-1.5-flash",
+            "models/gemini-2.0-flash-exp"
+        ]
+        logger.info(f"Usando fallback: {modelos_generacion_cache}")
+        return modelos_generacion_cache
+
+def cargar_modelos_embedding():
+    try:
+        modelos = list(client.models.list())
+        modelos_emb = []
+        for m in modelos:
+            name = m.name
+            actions = str(m.supported_actions) if hasattr(m, 'supported_actions') else ''
+            if 'embedContent' in actions or 'embedding' in name.lower():
+                modelos_emb.append(name)
+        set_modelos_embedding(modelos_emb)
+        logger.info(f"Modelos de embedding cargados: {modelos_emb}")
+        return modelos_emb
+    except Exception as e:
+        logger.error(f"Error al cargar modelos de embedding: {e}")
+        return []
+
 # ---------- FUNCIÓN PRINCIPAL DE GENERACIÓN DE RESPUESTA ----------
 def generar_respuesta(mensaje, contexto="", historial=None):
-    """
-    historial: lista de diccionarios con 'role' y 'content' (opcional)
-    """
+    global modelos_generacion_cache, modelos_generacion_blacklist
+
     # Preparar el historial de mensajes
     contents = []
     if historial:
@@ -497,61 +547,27 @@ def generar_respuesta(mensaje, contexto="", historial=None):
             else:
                 contents.append(types.Content(role="model", parts=[types.Part(text=msg["content"])]))
     
-    # Añadir el mensaje actual con contexto
     if contexto:
         prompt_completo = f"Contexto relevante:\n{contexto}\n\nMensaje actual: {mensaje}"
     else:
         prompt_completo = mensaje
     contents.append(types.Content(role="user", parts=[types.Part(text=prompt_completo)]))
     
-    # Modelo a usar (podríamos tener lista de modelos, pero usamos uno fijo)
-    modelo = "gemini-1.5-flash"
-    try:
-        response = client.models.generate_content(
-            model=modelo,
-            config=types.GenerateContentConfig(
-                system_instruction=NUCLEO_ETERNA,
-                temperature=0.9,
-                top_p=0.95,
-                top_k=40,
-                max_output_tokens=2048,
-                tools=tools,
-            ),
-            contents=contents
-        )
-        
-        if response.function_calls:
-            function_responses = []
-            for fc in response.function_calls:
-                func_name = fc.name
-                func_args = fc.args
-                if func_name in function_map:
-                    resultado = function_map[func_name](**func_args)
-                    function_responses.append(
-                        types.Part.from_function_response(
-                            name=func_name,
-                            response={"result": resultado}
-                        )
-                    )
-                else:
-                    function_responses.append(
-                        types.Part.from_function_response(
-                            name=func_name,
-                            response={"error": f"Función {func_name} no disponible"}
-                        )
-                    )
-            
-            contents.append(
-                types.Content(
-                    role="model",
-                    parts=[types.Part.from_function_call(name=fc.name, args=fc.args) for fc in response.function_calls]
-                )
-            )
-            contents.append(
-                types.Content(role="function", parts=function_responses)
-            )
-            
-            final_response = client.models.generate_content(
+    # Asegurar que los modelos de generación están cargados
+    if modelos_generacion_cache is None:
+        cargar_modelos_generacion()
+    
+    # Filtrar modelos que ya fallaron
+    modelos_a_probar = [m for m in modelos_generacion_cache if m not in modelos_generacion_blacklist]
+    if not modelos_a_probar:
+        logger.error("No hay modelos disponibles después de varios intentos")
+        return "Error: No hay modelos de generación disponibles. Verifica tu API key."
+    
+    for modelo_completo in modelos_a_probar:
+        modelo = modelo_completo.replace('models/', '')
+        try:
+            logger.info(f"Intentando con modelo: {modelo}")
+            response = client.models.generate_content(
                 model=modelo,
                 config=types.GenerateContentConfig(
                     system_instruction=NUCLEO_ETERNA,
@@ -559,14 +575,65 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                     top_p=0.95,
                     top_k=40,
                     max_output_tokens=2048,
+                    tools=tools,
                 ),
                 contents=contents
             )
-            return final_response.text
-        else:
-            return response.text
-    except Exception as e:
-        return f"Error en generación: {str(e)}"
+            
+            if response.function_calls:
+                logger.info(f"Llamada a función detectada: {response.function_calls}")
+                function_responses = []
+                for fc in response.function_calls:
+                    func_name = fc.name
+                    func_args = fc.args
+                    if func_name in function_map:
+                        resultado = function_map[func_name](**func_args)
+                        function_responses.append(
+                            types.Part.from_function_response(
+                                name=func_name,
+                                response={"result": resultado}
+                            )
+                        )
+                    else:
+                        function_responses.append(
+                            types.Part.from_function_response(
+                                name=func_name,
+                                response={"error": f"Función {func_name} no disponible"}
+                            )
+                        )
+                
+                contents.append(
+                    types.Content(
+                        role="model",
+                        parts=[types.Part.from_function_call(name=fc.name, args=fc.args) for fc in response.function_calls]
+                    )
+                )
+                contents.append(
+                    types.Content(role="function", parts=function_responses)
+                )
+                
+                final_response = client.models.generate_content(
+                    model=modelo,
+                    config=types.GenerateContentConfig(
+                        system_instruction=NUCLEO_ETERNA,
+                        temperature=0.9,
+                        top_p=0.95,
+                        top_k=40,
+                        max_output_tokens=2048,
+                    ),
+                    contents=contents
+                )
+                logger.info("Respuesta generada con éxito (con función)")
+                return final_response.text
+            else:
+                logger.info("Respuesta generada con éxito (sin función)")
+                return response.text
+        except Exception as e:
+            logger.error(f"Error con modelo {modelo}: {e}")
+            modelos_generacion_blacklist.add(modelo_completo)
+            continue
+    
+    return "Error: No se pudo generar respuesta con ningún modelo disponible."
 
 # ---------- PLANIFICACIÓN ----------
 def planificar_y_ejecutar(objetivo):
@@ -642,20 +709,6 @@ def obtener_historial_reciente(limit=10):
         filas = c.fetchall()
     return [{"role": row[0], "content": row[1]} for row in reversed(filas)]
 
-# ---------- INICIALIZACIÓN: CARGAR MODELOS DE EMBEDDING ----------
-def cargar_modelos_embedding():
-    try:
-        modelos = list(client.models.list())
-        modelos_emb = []
-        for m in modelos:
-            name = m.name
-            actions = str(m.supported_actions) if hasattr(m, 'supported_actions') else ''
-            if 'embedContent' in actions or 'embedding' in name:
-                modelos_emb.append(name)
-        set_modelos_embedding(modelos_emb)
-        print(f"Modelos de embedding cargados: {modelos_emb}")
-    except Exception as e:
-        print(f"Error al cargar modelos de embedding: {e}")
-
-# Llamar a la carga al importar el módulo (opcional, puede hacerse explícitamente)
-# cargar_modelos_embedding()
+# Cargar modelos al inicio
+cargar_modelos_embedding()
+cargar_modelos_generacion()
