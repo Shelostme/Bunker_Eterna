@@ -1,27 +1,29 @@
-
-       import streamlit as st
+import streamlit as st
 import os
 from eterna_core import (
     generar_respuesta,
     buscar_textos_similares,
     guardar_interaccion,
     planificar_y_ejecutar,
-    NUCLEO_ETERNA,
-    cargar_modelos_embedding,
-    set_modelos_embedding,
     reiniciar_indice_faiss,
+    cargar_modelos_embedding,
 )
 
-# Configurar variables de entorno desde secrets de Streamlit
-os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
-if "EMAIL_SMTP_SERVER" in st.secrets:
-    os.environ["EMAIL_SMTP_SERVER"] = st.secrets["EMAIL_SMTP_SERVER"]
-    os.environ["EMAIL_SMTP_PORT"] = str(st.secrets["EMAIL_SMTP_PORT"])
-    os.environ["EMAIL_REMITENTE"] = st.secrets["EMAIL_REMITENTE"]
-    os.environ["EMAIL_PASSWORD"] = st.secrets["EMAIL_PASSWORD"]
-if "HA_URL" in st.secrets:
-    os.environ["HA_URL"] = st.secrets["HA_URL"]
-    os.environ["HA_TOKEN"] = st.secrets["HA_TOKEN"]
+# Cargar variables de entorno (para local) o usar st.secrets (para nube)
+if os.path.exists(".env"):
+    from dotenv import load_dotenv
+    load_dotenv()
+else:
+    # En Streamlit Cloud, las variables vienen de los secrets
+    os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+    if "EMAIL_SMTP_SERVER" in st.secrets:
+        os.environ["EMAIL_SMTP_SERVER"] = st.secrets["EMAIL_SMTP_SERVER"]
+        os.environ["EMAIL_SMTP_PORT"] = str(st.secrets["EMAIL_SMTP_PORT"])
+        os.environ["EMAIL_REMITENTE"] = st.secrets["EMAIL_REMITENTE"]
+        os.environ["EMAIL_PASSWORD"] = st.secrets["EMAIL_PASSWORD"]
+    if "HA_URL" in st.secrets:
+        os.environ["HA_URL"] = st.secrets["HA_URL"]
+        os.environ["HA_TOKEN"] = st.secrets["HA_TOKEN"]
 
 # Inicializar modelos de embedding (solo una vez)
 if 'modelos_cargados' not in st.session_state:
