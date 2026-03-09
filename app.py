@@ -8,7 +8,11 @@ from datetime import datetime
 import os
 import faiss
 import numpy as np
-import re  # <-- AÑADIDO para limpiar títulos
+import re
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import subprocess
 
 # ---------- NUEVO NÚCLEO DE PERSONALIDAD INTEGRAL ----------
 NUCLEO_ETERNA = """
@@ -72,9 +76,6 @@ with st.expander("🔧 Diagnóstico de modelos (solo para desarrollo)", expanded
 # ---------- HERRAMIENTAS (FUNCTION CALLING) ----------
 # Herramienta 1: Cálculo de predimensionado de viga
 def calcular_predimensionado_viga(longitud: float, carga: float) -> str:
-    """
-    Calcula la altura aproximada de una viga simplemente apoyada usando la fórmula h = L/10 (carga liviana) o L/8 (carga pesada).
-    """
     try:
         if carga < 1000:
             h = longitud / 10
@@ -88,10 +89,6 @@ def calcular_predimensionado_viga(longitud: float, carga: float) -> str:
 
 # Herramienta 2: Guardar reporte en archivo de texto
 def guardar_reporte_txt(titulo: str, contenido: str) -> str:
-    """
-    Guarda un reporte en un archivo .txt en el directorio actual.
-    El nombre del archivo se genera a partir del título y la fecha/hora.
-    """
     try:
         nombre_base = re.sub(r'[^\w\s-]', '', titulo).strip().replace(' ', '_')
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -106,43 +103,232 @@ def guardar_reporte_txt(titulo: str, contenido: str) -> str:
     except Exception as e:
         return f"Error al guardar reporte: {str(e)}"
 
+# Herramienta 3: Consultar clima actual (vía wttr.in)
+def consultar_clima(ciudad: str) -> str:
+    try:
+        url = f"https://wttr.in/{ciudad}?format=%C+%t+%w&m"
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            return f"Clima en {ciudad}: {response.text.strip()}"
+        else:
+            return f"No se pudo obtener el clima para {ciudad} (código {response.status_code})"
+    except Exception as e:
+        return f"Error consultando clima: {str(e)}"
+
+# Herramienta 4: Agregar tarea a la lista pendiente (SQLite)
+def agregar_tarea(descripcion: str, fecha_limite: str = "") -> str:
+    try:
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS tareas 
+                    (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     descripcion TEXT,
+                     fecha_limite TEXT,
+                     completada INTEGER DEFAULT 0,
+                     creada TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+        c.execute("INSERT INTO tareas (descripcion, fecha_limite) VALUES (?, ?)",
+                  (descripcion, fecha_limite))
+        conn.commit()
+        return f"Tarea '{descripcion}' agregada correctamente."
+    except Exception as e:
+        return f"Error al agregar tarea: {str(e)}"
+
+# Herramienta 5: Listar tareas pendientes
+def listar_tareas() -> str:
+    try:
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS tareas 
+                    (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     descripcion TEXT,
+                     fecha_limite TEXT,
+                     completada INTEGER DEFAULT 0,
+                     creada TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+        c.execute("SELECT id, descripcion, fecha_limite, creada FROM tareas WHERE completada=0 ORDER BY creada DESC")
+        filas = c.fetchall()
+        if not filas:
+            return "No hay tareas pendientes."
+        resultado = "Tareas pendientes:\n"
+        for id, desc, fl, creada in filas:
+            fl_str = f" (para: {fl})" if fl else ""
+            resultado += f"- [{id}] {desc}{fl_str} (creada: {creada[:10]})\n"
+        return resultado
+    except Exception as e:
+        return f"Error al listar tareas: {str(e)}"
+
+# Herramienta 6: Ejecutar comando seguro (whitelist)
+def ejecutar_comando_seguro(comando: str) -> str:
+    comandos_permitidos = {
+        'date': ['date'],
+        'uptime': ['uptime'],
+        'df': ['df', '-h'],
+        'free': ['free', '-h'],
+        'ls': ['ls', '-la'],
+        'whoami': ['whoami'],
+        'uname': ['uname', '-a'],
+    }
+    if comando not in comandos_permitidos:
+        return f"Comando '{comando}' no permitido. Los comandos válidos son: {', '.join(comandos_permitidos.keys())}"
+    try:
+        resultado = subprocess.run(comandos_permitidos[comando], capture_output=True, text=True, timeout=5)
+        if resultado.returncode == 0:
+            return f"\n{resultado.stdout}\n"
+        else:
+            return f"Error: {resultado.stderr}"
+    except Exception as e:
+        return f"Excepción al ejecutar comando: {str(e)}"
+
+# Herramienta 7: Enviar email real (SMTP)
+def enviar_email_real(destinatario: str, asunto: str, cuerpo: str) -> str:
+    try:
+        smtp_server = st.secrets["EMAIL_SMTP_SERVER"]
+        smtp_port = st.secrets["EMAIL_SMTP_PORT"]
+        remitente = st.secrets["EMAIL_REMITENTE"]
+        password = st.secrets["EMAIL_PASSWORD"]
+
+        msg = MIMEMultipart()
+        msg['From'] = remitente
+        msg['To'] = destinatario
+        msg['Subject'] = asunto
+        msg.attach(MIMEText(cuerpo, 'plain'))
+
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(remitente, password)
+        server.send_message(msg)
+        server.quit()
+        return f"Email enviado correctamente a {destinatario}."
+    except Exception as e:
+        return f"Error al enviar email: {str(e)}"
+
+# Herramienta 8: Controlar dispositivo en Home Assistant
+def controlar_dispositivo(entidad: str, accion: str) -> str:
+    """
+    Controla un dispositivo a través de Home Assistant.
+    Requiere HA_URL y HA_TOKEN en secrets.
+    Ejemplo de entidad: "light.sala"
+    """
+    try:
+        ha_url = st.secrets["HA_URL"].rstrip('/')
+        ha_token = st.secrets["HA_TOKEN"]
+    except KeyError:
+        return "Error: Configura HA_URL y HA_TOKEN en secrets para usar control de dispositivos."
+
+    headers = {
+        "Authorization": f"Bearer {ha_token}",
+        "Content-Type": "application/json",
+    }
+    if accion.lower() in ["encender", "on"]:
+        service = "turn_on"
+    elif accion.lower() in ["apagar", "off"]:
+        service = "turn_off"
+    else:
+        return f"Acción '{accion}' no soportada. Usa 'encender'/'on' o 'apagar'/'off'."
+
+    try:
+        domain = entidad.split('.')[0]
+    except:
+        return "Formato de entidad inválido. Debe ser 'dominio.nombre' (ej. 'light.sala')."
+
+    url = f"{ha_url}/api/services/{domain}/{service}"
+    payload = {"entity_id": entidad}
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=5)
+        if response.status_code == 200:
+            return f"Comando '{accion}' enviado a {entidad} correctamente."
+        else:
+            return f"Error en Home Assistant: {response.status_code} - {response.text}"
+    except Exception as e:
+        return f"Error conectando con Home Assistant: {str(e)}"
+
 # Definición de herramientas en formato para google-genai
 tools = [
     types.Tool(function_declarations=[
         types.FunctionDeclaration(
             name="calcular_predimensionado_viga",
-            description="Calcula la altura recomendada para una viga según su longitud y carga. Útil para predimensionado rápido.",
+            description="Calcula la altura recomendada para una viga según su longitud y carga.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "longitud": {
-                        "type": "number",
-                        "description": "Longitud de la viga en metros."
-                    },
-                    "carga": {
-                        "type": "number",
-                        "description": "Carga aplicada en kg/m (kilogramos por metro lineal)."
-                    }
+                    "longitud": {"type": "number", "description": "Longitud de la viga en metros."},
+                    "carga": {"type": "number", "description": "Carga aplicada en kg/m."}
                 },
                 "required": ["longitud", "carga"]
             }
         ),
         types.FunctionDeclaration(
             name="guardar_reporte_txt",
-            description="Guarda un reporte de texto en un archivo .txt en el servidor. Útil para guardar resultados de ejercicios, bitácoras de hacking, inventarios, etc.",
+            description="Guarda un reporte de texto en un archivo .txt en el servidor.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "titulo": {
-                        "type": "string",
-                        "description": "Título del reporte, se usará para generar el nombre del archivo."
-                    },
-                    "contenido": {
-                        "type": "string",
-                        "description": "Contenido detallado del reporte."
-                    }
+                    "titulo": {"type": "string", "description": "Título del reporte."},
+                    "contenido": {"type": "string", "description": "Contenido detallado."}
                 },
                 "required": ["titulo", "contenido"]
+            }
+        ),
+        types.FunctionDeclaration(
+            name="consultar_clima",
+            description="Obtiene el clima actual de una ciudad.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "ciudad": {"type": "string", "description": "Nombre de la ciudad (ej. 'Caracas')."}
+                },
+                "required": ["ciudad"]
+            }
+        ),
+        types.FunctionDeclaration(
+            name="agregar_tarea",
+            description="Agrega una nueva tarea a la lista de pendientes.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "descripcion": {"type": "string", "description": "Descripción de la tarea."},
+                    "fecha_limite": {"type": "string", "description": "Fecha límite opcional (formato YYYY-MM-DD)."}
+                },
+                "required": ["descripcion"]
+            }
+        ),
+        types.FunctionDeclaration(
+            name="listar_tareas",
+            description="Lista todas las tareas pendientes.",
+            parameters={"type": "object", "properties": {}}
+        ),
+        types.FunctionDeclaration(
+            name="ejecutar_comando_seguro",
+            description="Ejecuta un comando del sistema de una lista segura (date, uptime, df, free, ls, whoami, uname).",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "comando": {"type": "string", "description": "Nombre del comando a ejecutar (ej. 'date')."}
+                },
+                "required": ["comando"]
+            }
+        ),
+        types.FunctionDeclaration(
+            name="enviar_email_real",
+            description="Envía un email real vía SMTP. Requiere configuración en secrets.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "destinatario": {"type": "string", "description": "Dirección de correo del destinatario."},
+                    "asunto": {"type": "string", "description": "Asunto del email."},
+                    "cuerpo": {"type": "string", "description": "Cuerpo del mensaje."}
+                },
+                "required": ["destinatario", "asunto", "cuerpo"]
+            }
+        ),
+        types.FunctionDeclaration(
+            name="controlar_dispositivo",
+            description="Controla un dispositivo (luces, enchufes, etc.) a través de Home Assistant. Requiere configuración en secrets.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "entidad": {"type": "string", "description": "ID de la entidad en Home Assistant (ej. 'light.sala')."},
+                    "accion": {"type": "string", "description": "Acción: 'encender'/'on' o 'apagar'/'off'."}
+                },
+                "required": ["entidad", "accion"]
             }
         )
     ])
@@ -151,8 +337,75 @@ tools = [
 # Mapeo de nombres de función a funciones reales
 function_map = {
     "calcular_predimensionado_viga": calcular_predimensionado_viga,
-    "guardar_reporte_txt": guardar_reporte_txt
+    "guardar_reporte_txt": guardar_reporte_txt,
+    "consultar_clima": consultar_clima,
+    "agregar_tarea": agregar_tarea,
+    "listar_tareas": listar_tareas,
+    "ejecutar_comando_seguro": ejecutar_comando_seguro,
+    "enviar_email_real": enviar_email_real,
+    "controlar_dispositivo": controlar_dispositivo
 }
+
+# ---------- MÓDULO DE PLANIFICACIÓN AUTÓNOMA (ReAct) ----------
+def planificar_y_ejecutar(objetivo):
+    """
+    Toma un objetivo complejo, lo descompone en pasos y los ejecuta usando las herramientas disponibles.
+    """
+    plan_prompt = f"""
+Eres ETERNA, una agente autónoma. Tu objetivo es: "{objetivo}"
+
+Descompón este objetivo en una secuencia de pasos. Cada paso debe ser una acción que puedas realizar con tus herramientas disponibles:
+- controlar_dispositivo(entidad, accion)
+- calcular_predimensionado_viga(longitud, carga)
+- guardar_reporte_txt(titulo, contenido)
+- consultar_clima(ciudad)
+- agregar_tarea(descripcion, fecha_limite)
+- listar_tareas()
+- ejecutar_comando_seguro(comando)
+- enviar_email_real(destinatario, asunto, cuerpo)
+
+Devuelve los pasos en formato JSON, así:
+[
+    {{"herramienta": "controlar_dispositivo", "argumentos": {{"entidad": "light.sala", "accion": "apagar"}}}},
+    {{"herramienta": "consultar_clima", "argumentos": {{"ciudad": "Caracas"}}}}
+]
+Si no es posible descomponer, responde con un JSON vacío [].
+"""
+    try:
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            config=types.GenerateContentConfig(temperature=0.2),
+            contents=[plan_prompt]
+        )
+        plan_text = response.text.strip()
+        # Extraer JSON
+        start = plan_text.find('[')
+        end = plan_text.rfind(']') + 1
+        if start != -1 and end != 0:
+            plan_json = plan_text[start:end]
+            pasos = json.loads(plan_json)
+        else:
+            pasos = []
+    except Exception as e:
+        return f"Error al generar plan: {e}"
+
+    if not pasos:
+        return "No pude descomponer el objetivo en pasos. Intenta ser más específico."
+
+    resultados = []
+    for paso in pasos:
+        herramienta = paso.get("herramienta")
+        args = paso.get("argumentos", {})
+        if herramienta in function_map:
+            try:
+                resultado = function_map[herramienta](**args)
+                resultados.append(f"Paso '{herramienta}': {resultado}")
+            except Exception as e:
+                resultados.append(f"Error en paso '{herramienta}': {e}")
+        else:
+            resultados.append(f"Herramienta '{herramienta}' no disponible")
+
+    return "\n".join(resultados)
 
 # ---------- MEMORIA SQLITE (HISTORIAL) ----------
 @st.cache_resource
@@ -165,6 +418,12 @@ def get_db():
     conn.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON memoria (timestamp)')
     conn.execute('''CREATE TABLE IF NOT EXISTS textos 
                     (id INTEGER PRIMARY KEY AUTOINCREMENT, contenido TEXT)''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS tareas 
+                    (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     descripcion TEXT,
+                     fecha_limite TEXT,
+                     completada INTEGER DEFAULT 0,
+                     creada TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     conn.commit()
     return conn
 
@@ -175,7 +434,6 @@ index_path = 'faiss.index'
 
 @st.cache_resource
 def init_faiss():
-    """Inicializa el índice FAISS. Si existe, lo carga; si no, crea uno vacío con dimensión 0 (luego se ajustará)."""
     if os.path.exists(index_path):
         index = faiss.read_index(index_path)
     else:
@@ -185,13 +443,8 @@ def init_faiss():
 index = init_faiss()
 
 def obtener_embedding(texto):
-    """
-    Prueba todos los modelos de embedding disponibles hasta obtener uno exitoso.
-    Retorna el vector y el nombre del modelo usado, o (None, None) si todos fallan.
-    """
     modelos_emb = st.session_state.get('modelos_embedding', [])
     if not modelos_emb:
-        st.warning("No hay modelos de embedding disponibles.")
         return None, None
     
     modelo_activo = st.session_state.get('modelo_embedding_activo')
@@ -206,7 +459,6 @@ def obtener_embedding(texto):
     for modelo_completo in modelos_a_probar:
         modelo = modelo_completo.replace('models/', '')
         
-        # Intentar con embedContent
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:embedContent?key={api_key}"
         payload = {
             "model": f"models/{modelo}",
@@ -228,7 +480,6 @@ def obtener_embedding(texto):
         except Exception:
             pass
         
-        # Si falla, intentar con embedText
         url_text = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:embedText?key={api_key}"
         payload_text = {"text": texto}
         try:
@@ -242,14 +493,9 @@ def obtener_embedding(texto):
         except Exception:
             pass
     
-    st.warning("No se pudo obtener embedding con ningún modelo disponible.")
     return None, None
 
 def guardar_embedding(texto):
-    """
-    Guarda el texto y su embedding. Si el índice no existe o la dimensión no coincide,
-    lo recrea automáticamente si está vacío. Si no está vacío, muestra error.
-    """
     global index
     vector, modelo = obtener_embedding(texto)
     if vector is None:
@@ -282,7 +528,6 @@ def guardar_embedding(texto):
         return None
 
 def buscar_textos_similares(consulta, k=3):
-    """Busca textos similares."""
     global index
     if index is None or index.ntotal == 0:
         return ""
@@ -306,7 +551,6 @@ def buscar_textos_similares(consulta, k=3):
         st.error(f"Error en búsqueda: {e}")
         return ""
 
-# Botón para reiniciar el índice FAISS
 with st.expander("🛠️ Mantenimiento de memoria", expanded=False):
     if st.button("Reiniciar índice FAISS (borrar todos los vectores)"):
         if os.path.exists(index_path):
@@ -331,34 +575,36 @@ def guardar_interaccion(role, content):
     if role == "assistant":
         guardar_embedding(content)
 
-# ---------- GENERACIÓN DE RESPUESTA (CON FUNCTION CALLING) ----------
+# ---------- GENERACIÓN DE RESPUESTA (CON FUNCTION CALLING Y PLANIFICACIÓN) ----------
 def generar_respuesta(mensaje, contexto_extra=""):
+    # Detectar si el mensaje es un objetivo complejo (puedes ajustar la lógica)
+    palabras_clave = ["prepara", "organiza", "planifica", "secuencia", "automatiza", "haz todo lo necesario"]
+    if any(palabra in mensaje.lower() for palabra in palabras_clave):
+        resultado_plan = planificar_y_ejecutar(mensaje)
+        if resultado_plan and not resultado_plan.startswith("Error") and resultado_plan != "No pude descomponer el objetivo en pasos. Intenta ser más específico.":
+            return resultado_plan
+        # Si falla, cae en el flujo normal
+
     modelos_gen = st.session_state.get('modelos_generacion', [])
     if not modelos_gen:
         return "Error: No hay modelos de generación disponibles. Verifica tu API key."
     
-    # Construir el prompt completo con contexto
     if contexto_extra:
         prompt_completo = f"Contexto relevante:\n{contexto_extra}\n\nMensaje actual: {mensaje}"
     else:
         prompt_completo = mensaje
     
-    # Preparar el historial de mensajes para el modelo
     contents = []
-    # Añadir todos los mensajes anteriores (excluyendo el último que es el actual)
     for msg in st.session_state.mensajes[:-1]:
         if msg["role"] == "user":
             contents.append(types.Content(role="user", parts=[types.Part(text=msg["content"])]))
         else:
             contents.append(types.Content(role="model", parts=[types.Part(text=msg["content"])]))
-    # Añadir el mensaje actual con el contexto extra
     contents.append(types.Content(role="user", parts=[types.Part(text=prompt_completo)]))
     
-    # Probar cada modelo hasta que funcione
     for modelo_completo in modelos_gen:
         modelo = modelo_completo.replace('models/', '')
         try:
-            # Primera llamada con herramientas
             response = client.models.generate_content(
                 model=modelo,
                 config=types.GenerateContentConfig(
@@ -372,9 +618,7 @@ def generar_respuesta(mensaje, contexto_extra=""):
                 contents=contents
             )
             
-            # Verificar si hay llamadas a función
             if response.function_calls:
-                # Procesar todas las llamadas a función
                 function_responses = []
                 for fc in response.function_calls:
                     func_name = fc.name
@@ -395,19 +639,16 @@ def generar_respuesta(mensaje, contexto_extra=""):
                             )
                         )
                 
-                # Añadir la respuesta del modelo (con las llamadas) al historial
                 contents.append(
                     types.Content(
                         role="model",
                         parts=[types.Part.from_function_call(name=fc.name, args=fc.args) for fc in response.function_calls]
                     )
                 )
-                # Añadir las respuestas de función como un mensaje de role "function"
                 contents.append(
                     types.Content(role="function", parts=function_responses)
                 )
                 
-                # Segunda llamada al modelo para obtener la respuesta final
                 final_response = client.models.generate_content(
                     model=modelo,
                     config=types.GenerateContentConfig(
@@ -416,13 +657,11 @@ def generar_respuesta(mensaje, contexto_extra=""):
                         top_p=0.95,
                         top_k=40,
                         max_output_tokens=2048,
-                        # No se necesitan herramientas en esta segunda llamada
                     ),
                     contents=contents
                 )
                 return final_response.text
             else:
-                # No hay llamadas a función, devolver texto directamente
                 return response.text
         except Exception as e:
             st.warning(f"Error con modelo {modelo}: {e}")
