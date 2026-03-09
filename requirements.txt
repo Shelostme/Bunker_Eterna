@@ -3,3 +3,9 @@ google-genai
 faiss-cpu
 numpy
 requests
+smtplib
+email
+subprocess
+fastapi
+uvicorn
+pydantic
