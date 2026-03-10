@@ -2,7 +2,6 @@ import sys
 from pathlib import Path
 
 # ----- SOLUCIÓN PERMANENTE: Asegurar que Python encuentre los módulos -----
-# Agregamos el directorio actual al path de Python para que encuentre eterna_core.py
 current_dir = Path(_file_).parent.absolute()
 if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
@@ -21,7 +20,7 @@ from eterna_core import (
     cargar_modelos_generacion,
 )
 
-# Configurar logging (los logs de streamlit se ven en la terminal, no en la interfaz)
+# Configurar logging (los logs se ven en la terminal, no en la interfaz)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(_name_)
 
