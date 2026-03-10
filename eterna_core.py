@@ -17,7 +17,7 @@ from google.genai import types
 import logging
 
 # Configurar logging (usando _name_ correctamente)
-logger = logging.getLogger(_name_)
+logger = logging.getLogger(__name__)
 
 # ---------- CONFIGURACIÓN DESDE VARIABLES DE ENTORNO ----------
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
