@@ -1,13 +1,5 @@
-import sys
-import os
-
-# ----- SOLUCIÓN PERMANENTE: Asegurar que Python encuentre los módulos -----
-current_dir = os.path.dirname(os.path.abspath(_file_))
-if current_dir not in sys.path:
-    sys.path.insert(0, current_dir)
-# -------------------------------------------------------------------------
-
 import streamlit as st
+import os
 import logging
 from eterna_core import (
     generar_respuesta,
@@ -44,7 +36,7 @@ else:
     except Exception as e:
         logger.error(f"Error cargando secrets: {e}")
 
-# Inicializar modelos de embedding y generación (solo una vez en la sesión de Streamlit)
+# Inicializar modelos de embedding y generación (solo una vez en la sesión)
 if 'modelos_cargados' not in st.session_state:
     with st.spinner("Cargando modelos..."):
         cargar_modelos_embedding()
