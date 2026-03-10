@@ -1,6 +1,5 @@
 import streamlit as st
 import os
-import logging
 from eterna_core import (
     generar_respuesta,
     buscar_textos_similares,
@@ -11,17 +10,14 @@ from eterna_core import (
     cargar_modelos_generacion,
 )
 
-# Configurar logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(_name_)
+print("Iniciando app.py")
 
-# Cargar variables de entorno (para local) o usar st.secrets (para nube)
+# Cargar variables de entorno
 if os.path.exists(".env"):
     from dotenv import load_dotenv
     load_dotenv()
-    logger.info("Cargando variables desde .env")
+    print("Cargadas variables desde .env")
 else:
-    # En Streamlit Cloud, las variables vienen de los secrets
     try:
         os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
         if "EMAIL_SMTP_SERVER" in st.secrets:
@@ -32,22 +28,22 @@ else:
         if "HA_URL" in st.secrets:
             os.environ["HA_URL"] = st.secrets["HA_URL"]
             os.environ["HA_TOKEN"] = st.secrets["HA_TOKEN"]
-        logger.info("Variables cargadas desde secrets de Streamlit")
+        print("Variables cargadas desde secrets")
     except Exception as e:
-        logger.error(f"Error cargando secrets: {e}")
+        print(f"Error cargando secrets: {e}")
 
-# Inicializar modelos de embedding y generación (solo una vez en la sesión)
+# Inicializar modelos
 if 'modelos_cargados' not in st.session_state:
     with st.spinner("Cargando modelos..."):
         cargar_modelos_embedding()
         cargar_modelos_generacion()
         st.session_state['modelos_cargados'] = True
-    logger.info("Modelos cargados en sesión")
+    print("Modelos cargados en sesión")
 
 st.set_page_config(page_title="ETERNA", layout="wide")
 st.markdown("<style>body { background-color: #0e1117; color: #00ff00; }</style>", unsafe_allow_html=True)
 
-# Diagnóstico (opcional)
+# Diagnóstico
 with st.expander("🔧 Diagnóstico de modelos", expanded=False):
     if st.button("Recargar modelos de embedding"):
         with st.spinner("Recargando..."):
@@ -58,14 +54,14 @@ with st.expander("🔧 Diagnóstico de modelos", expanded=False):
             cargar_modelos_generacion()
         st.success("Modelos de generación recargados")
 
-# Mantenimiento de memoria
+# Mantenimiento
 with st.expander("🛠️ Mantenimiento de memoria", expanded=False):
     if st.button("Reiniciar índice FAISS (borrar todos los vectores)"):
         resultado = reiniciar_indice_faiss()
         st.success(resultado)
         st.rerun()
 
-# Inicializar historial en sesión
+# Inicializar historial
 if "mensajes" not in st.session_state:
     st.session_state.mensajes = []
 
@@ -80,20 +76,16 @@ if prompt := st.chat_input("Háblame, Didier..."):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Guardar interacción de usuario
     guardar_interaccion("user", prompt)
 
-    # Buscar contexto relevante (RAG)
     with st.spinner("Buscando en mi memoria..."):
         contexto = buscar_textos_similares(prompt, k=3)
 
-    # Detectar si es un objetivo complejo
     palabras_clave = ["prepara", "organiza", "planifica", "secuencia", "automatiza", "haz todo lo necesario"]
     if any(palabra in prompt.lower() for palabra in palabras_clave):
         with st.spinner("ETERNA está planificando..."):
             respuesta = planificar_y_ejecutar(prompt)
     else:
-        # Generar respuesta normal
         with st.spinner("ETERNA está pensando..."):
             respuesta = generar_respuesta(prompt, contexto, st.session_state.mensajes[:-1])
 
