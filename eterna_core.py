@@ -16,8 +16,7 @@ from google import genai
 from google.genai import types
 import logging
 
-# Configurar logging básico
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configurar logging (usando _name_ correctamente)
 logger = logging.getLogger(_name_)
 
 # ---------- CONFIGURACIÓN DESDE VARIABLES DE ENTORNO ----------
@@ -224,7 +223,7 @@ def reiniciar_indice_faiss():
     logger.info("Índice FAISS reiniciado")
     return "Índice FAISS reiniciado."
 
-# ---------- HERRAMIENTAS (sin cambios) ----------
+# ---------- HERRAMIENTAS ----------
 def calcular_predimensionado_viga(longitud: float, carga: float) -> str:
     try:
         if carga < 1000:
@@ -709,6 +708,6 @@ def obtener_historial_reciente(limit=10):
         filas = c.fetchall()
     return [{"role": row[0], "content": row[1]} for row in reversed(filas)]
 
-# Cargar modelos al inicio
-cargar_modelos_embedding()
-cargar_modelos_generacion()
+# Cargar modelos al inicio (opcional, se hará bajo demanda)
+# cargar_modelos_embedding()
+# cargar_modelos_generacion()
