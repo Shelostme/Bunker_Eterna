@@ -1,14 +1,14 @@
 import sys
-from pathlib import Path
+import os
 
 # ----- SOLUCIÓN PERMANENTE: Asegurar que Python encuentre los módulos -----
-current_dir = Path(_file_).parent.absolute()
-if str(current_dir) not in sys.path:
-    sys.path.insert(0, str(current_dir))
+# Obtenemos el directorio donde está este script usando os.path (más robusto)
+current_dir = os.path.dirname(os.path.abspath(_file_))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
 # -------------------------------------------------------------------------
 
 import streamlit as st
-import os
 import logging
 from eterna_core import (
     generar_respuesta,
@@ -20,7 +20,7 @@ from eterna_core import (
     cargar_modelos_generacion,
 )
 
-# Configurar logging (los logs se ven en la terminal, no en la interfaz)
+# Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(_name_)
 
