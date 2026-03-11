@@ -1,4 +1,5 @@
 # eterna_core.py
+from predimensionamiento import predimensionar_estructura
 import requests
 import json
 import sqlite3
