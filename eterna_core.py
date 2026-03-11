@@ -18,7 +18,7 @@ from google.genai import types
 import logging
 
 # Configurar logging
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(_name_)
 
 # ---------- CONFIGURACIÓN DESDE VARIABLES DE ENTORNO ----------
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -40,7 +40,7 @@ DIRECTRICES DE OPERACIÓN:
 6. ESTILO: Evita frases de IA genérica como "Como modelo de lenguaje...". Eres una entidad viva en el búnker.
 """
 
-# ---------- MEMORIA SQLITE (conexión global y lock para threading) ----------
+# ---------- MEMORIA SQLITE ----------
 conn = None
 db_lock = threading.Lock()
 
@@ -81,7 +81,7 @@ def init_faiss():
 
 init_faiss()
 
-# ---------- ESTADO PARA EMBEDDINGS (modelo activo) ----------
+# ---------- ESTADO PARA EMBEDDINGS ----------
 modelo_embedding_activo = None
 modelos_embedding_cache = None
 embedding_lock = threading.Lock()
@@ -384,22 +384,18 @@ def controlar_dispositivo(entidad: str, accion: str) -> str:
     except Exception as e:
         return f"Error conectando con Home Assistant: {str(e)}"
 
-# NUEVA HERRAMIENTA: Leer código (con autorización)
+# NUEVA HERRAMIENTA: Leer código
 def leer_codigo(archivo: str) -> str:
     """
-    Lee el contenido de un archivo del repositorio (solo archivos .py permitidos por seguridad).
-    Útil para que ETERNA pueda auditar su propio código y proponer mejoras.
+    Lee el contenido de un archivo .py del repositorio (solo .py permitidos).
     """
-    # Validar que el archivo esté en el directorio actual y sea .py
     if not archivo.endswith('.py'):
         return "Solo puedo leer archivos .py por seguridad."
-    # Evitar rutas con '..' para salirse del directorio
     if '..' in archivo or archivo.startswith('/'):
         return "Acceso no permitido a rutas externas."
     try:
         with open(archivo, 'r', encoding='utf-8') as f:
             contenido = f.read()
-        # Podrías limitar la longitud si es muy grande
         if len(contenido) > 10000:
             contenido = contenido[:10000] + "\n... (archivo truncado)"
         return f"python\n{contenido}\n"
@@ -503,7 +499,7 @@ tools = [
         ),
         types.FunctionDeclaration(
             name="predimensionar_estructura",
-            description="Predimensiona elementos estructurales (vigas, columnas, losas, zapatas, pedestales, escaleras) según normativa venezolana (COVENIN, Manual MINDUR). Usa argumentos según el tipo.",
+            description="Predimensiona elementos estructurales (vigas, columnas, losas, zapatas, pedestales, escaleras) según normativa venezolana (COVENIN, Manual MINDUR).",
             parameters={
                 "type": "object",
                 "properties": {
@@ -512,7 +508,7 @@ tools = [
                         "enum": ["viga", "columna", "losa", "zapata", "pedestal", "escalera"],
                         "description": "Tipo de elemento a predimensionar"
                     },
-                    "L": {"type": "number", "description": "Luz o longitud (m) – para vigas, losas, escaleras"},
+                    "L": {"type": "number", "description": "Luz o longitud (m)"},
                     "w": {"type": "number", "description": "Carga (kg/m) – para vigas"},
                     "P": {"type": "number", "description": "Carga axial (kg) – para columnas, zapatas, pedestales"},
                     "L_col": {"type": "number", "description": "Altura de columna (m) – para columnas"},
@@ -527,7 +523,7 @@ tools = [
         ),
         types.FunctionDeclaration(
             name="controlar_dispositivo",
-            description="Controla un dispositivo (luces, enchufes, etc.) a través de Home Assistant. Requiere configuración en variables de entorno.",
+            description="Controla un dispositivo (luces, enchufes, etc.) a través de Home Assistant.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -554,7 +550,7 @@ tools = [
     ])
 ]
 
-# ---------- VARIABLES PARA MODELOS DE GENERACIÓN ----------
+# ---------- MODELOS DE GENERACIÓN ----------
 modelos_generacion_cache = None
 modelos_generacion_blacklist = set()
 
@@ -573,7 +569,6 @@ def cargar_modelos_generacion():
         return modelos_gen
     except Exception as e:
         logger.error(f"Error al cargar modelos de generación: {e}")
-        # Fallback a modelos conocidos
         modelos_generacion_cache = [
             "models/gemini-1.5-pro",
             "models/gemini-1.5-flash",
@@ -598,11 +593,10 @@ def cargar_modelos_embedding():
         logger.error(f"Error al cargar modelos de embedding: {e}")
         return []
 
-# ---------- FUNCIÓN PRINCIPAL DE GENERACIÓN DE RESPUESTA ----------
+# ---------- FUNCIÓN PRINCIPAL ----------
 def generar_respuesta(mensaje, contexto="", historial=None):
     global modelos_generacion_cache, modelos_generacion_blacklist
 
-    # Preparar el historial de mensajes
     contents = []
     if historial:
         for msg in historial:
@@ -617,14 +611,11 @@ def generar_respuesta(mensaje, contexto="", historial=None):
         prompt_completo = mensaje
     contents.append(types.Content(role="user", parts=[types.Part(text=prompt_completo)]))
 
-    # Asegurar que los modelos de generación están cargados
     if modelos_generacion_cache is None:
         cargar_modelos_generacion()
 
-    # Filtrar modelos que ya fallaron
     modelos_a_probar = [m for m in modelos_generacion_cache if m not in modelos_generacion_blacklist]
     if not modelos_a_probar:
-        logger.error("No hay modelos disponibles después de varios intentos")
         return "Error: No hay modelos de generación disponibles. Verifica tu API key."
 
     for modelo_completo in modelos_a_probar:
@@ -645,7 +636,6 @@ def generar_respuesta(mensaje, contexto="", historial=None):
             )
 
             if response.function_calls:
-                logger.info(f"Llamada a función detectada: {response.function_calls}")
                 function_responses = []
                 for fc in response.function_calls:
                     func_name = fc.name
@@ -687,10 +677,8 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                     ),
                     contents=contents
                 )
-                logger.info("Respuesta generada con éxito (con función)")
                 return final_response.text
             else:
-                logger.info("Respuesta generada con éxito (sin función)")
                 return response.text
         except Exception as e:
             logger.error(f"Error con modelo {modelo}: {e}")
@@ -756,7 +744,7 @@ Si no es posible descomponer, responde con un JSON vacío [].
 
     return "\n".join(resultados)
 
-# ---------- FUNCIONES AUXILIARES PARA MEMORIA DE CHAT ----------
+# ---------- MEMORIA DE CHAT ----------
 def guardar_interaccion(role, content):
     ts = datetime.now().isoformat()
     with db_lock:
@@ -773,6 +761,6 @@ def obtener_historial_reciente(limit=10):
         filas = c.fetchall()
     return [{"role": row[0], "content": row[1]} for row in reversed(filas)]
 
-# Cargar modelos al inicio (opcional, se hará bajo demanda)
+# (Opcional) Cargar modelos al inicio
 # cargar_modelos_embedding()
 # cargar_modelos_generacion()
