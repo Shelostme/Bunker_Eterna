@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import logging
 from eterna_core import (
     generar_respuesta,
     buscar_textos_similares,
@@ -10,13 +11,15 @@ from eterna_core import (
     cargar_modelos_generacion,
 )
 
-print("Iniciando app.py")
+# Configurar logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(_name_)
 
-# Cargar variables de entorno
+# Cargar variables de entorno (para local) o usar st.secrets (para nube)
 if os.path.exists(".env"):
     from dotenv import load_dotenv
     load_dotenv()
-    print("Cargadas variables desde .env")
+    logger.info("Cargando variables desde .env")
 else:
     try:
         os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
@@ -28,9 +31,9 @@ else:
         if "HA_URL" in st.secrets:
             os.environ["HA_URL"] = st.secrets["HA_URL"]
             os.environ["HA_TOKEN"] = st.secrets["HA_TOKEN"]
-        print("Variables cargadas desde secrets")
+        logger.info("Variables cargadas desde secrets")
     except Exception as e:
-        print(f"Error cargando secrets: {e}")
+        logger.error(f"Error cargando secrets: {e}")
 
 # Inicializar modelos
 if 'modelos_cargados' not in st.session_state:
@@ -38,7 +41,7 @@ if 'modelos_cargados' not in st.session_state:
         cargar_modelos_embedding()
         cargar_modelos_generacion()
         st.session_state['modelos_cargados'] = True
-    print("Modelos cargados en sesión")
+    logger.info("Modelos cargados en sesión")
 
 st.set_page_config(page_title="ETERNA", layout="wide")
 st.markdown("<style>body { background-color: #0e1117; color: #00ff00; }</style>", unsafe_allow_html=True)
