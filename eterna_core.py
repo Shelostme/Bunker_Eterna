@@ -394,6 +394,7 @@ function_map = {
     "ejecutar_comando_seguro": ejecutar_comando_seguro,
     "enviar_email_real": enviar_email_real,
     "controlar_dispositivo": controlar_dispositivo
+       "predimensionar_estructura": predimensionar_estructura,
 }
 
 # Definición de tools (para Gemini)
@@ -475,6 +476,30 @@ tools = [
                 "required": ["destinatario", "asunto", "cuerpo"]
             }
         ),
+        types.FunctionDeclaration(
+    name="predimensionar_estructura",
+    description="Predimensiona elementos estructurales (vigas, columnas, losas, zapatas, pedestales, escaleras) según normativa venezolana (COVENIN, Manual MINDUR). Usa argumentos según el tipo.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "tipo": {
+                "type": "string",
+                "enum": ["viga", "columna", "losa", "zapata", "pedestal", "escalera"],
+                "description": "Tipo de elemento a predimensionar"
+            },
+            "L": {"type": "number", "description": "Luz o longitud (m) – para vigas, losas, escaleras"},
+            "w": {"type": "number", "description": "Carga (kg/m) – para vigas"},
+            "P": {"type": "number", "description": "Carga axial (kg) – para columnas, zapatas, pedestales"},
+            "L_col": {"type": "number", "description": "Altura de columna (m) – para columnas"},
+            "L_menor": {"type": "number", "description": "Luz menor de losa (m) – para losas"},
+            "tipo_losa": {"type": "string", "enum": ["maciza", "nervada", "reticular"], "description": "Tipo de losa"},
+            "sobrecarga": {"type": "number", "description": "Sobrecarga de uso (kg/m²) – para losas"},
+            "q_adm": {"type": "number", "description": "Capacidad admisible del suelo (kg/cm²) – para zapatas"},
+            "zona_sismica": {"type": "boolean", "description": "Indica si es zona sísmica (por defecto True)"}
+        },
+        "required": ["tipo"]
+    }
+),
         types.FunctionDeclaration(
             name="controlar_dispositivo",
             description="Controla un dispositivo (luces, enchufes, etc.) a través de Home Assistant. Requiere configuración en variables de entorno.",
