@@ -466,6 +466,24 @@ tools = [
             }
         ),
         types.FunctionDeclaration(
+    name="buscar_en_web",
+    description="Busca información actualizada en internet sobre cualquier tema (videojuegos, noticias, etc.). Usa esto cuando necesites datos recientes o que no estén en mi conocimiento base.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "consulta": {
+                "type": "string",
+                "description": "La consulta de búsqueda, clara y específica."
+            },
+            "num_resultados": {
+                "type": "integer",
+                "description": "Número de resultados a devolver (por defecto 3)."
+            }
+        },
+        "required": ["consulta"]
+    }
+),
+        types.FunctionDeclaration(
             name="consultar_clima",
             description="Obtiene el clima actual de una ciudad.",
             parameters={
