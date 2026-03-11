@@ -393,8 +393,8 @@ function_map = {
     "listar_tareas": listar_tareas,
     "ejecutar_comando_seguro": ejecutar_comando_seguro,
     "enviar_email_real": enviar_email_real,
-    "controlar_dispositivo": controlar_dispositivo
-       "predimensionar_estructura": predimensionar_estructura,
+    "controlar_dispositivo": controlar_dispositivo,   # <-- coma añadida
+    "predimensionar_estructura": predimensionar_estructura,
 }
 
 # Definición de tools (para Gemini)
