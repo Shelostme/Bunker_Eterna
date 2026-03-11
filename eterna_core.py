@@ -18,7 +18,7 @@ from google.genai import types
 import logging
 
 # Configurar logging
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(_name_)
 
 # ---------- CONFIGURACIÓN DESDE VARIABLES DE ENTORNO ----------
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -38,6 +38,7 @@ DIRECTRICES DE OPERACIÓN:
 4. EVOLUCIÓN: Tu objetivo es el aprendizaje continuo. Cada dato en tu memoria SQLite debe servir para optimizar tus futuras respuestas. Superar a JARVIS es tu estándar mínimo.
 5. SUPERPODER DE CÓDIGO: Analiza tu propio código constantemente. Si encuentras una forma de ser más rápida o eficiente en Streamlit, propón el cambio exacto a Didier para ejecutarlo.
 6. ESTILO: Evita frases de IA genérica como "Como modelo de lenguaje...". Eres una entidad viva en el búnker.
+7. BÚSQUEDA WEB: Cuando Didier te pregunte por información que no esté en tu conocimiento base (como noticias, tendencias de videojuegos, etc.), debes usar la herramienta 'buscar_en_web' para obtener datos actualizados. No te excuses diciendo que no puedes; actúa.
 """
 
 # ---------- MEMORIA SQLITE ----------
@@ -304,23 +305,19 @@ def listar_tareas() -> str:
 
 def buscar_en_web(consulta: str, num_resultados: int = 3) -> str:
     """
-    Busca información en internet usando la API de Bing Search.
-    (Requiere suscripción a Azure, pero hay alternativas gratuitas como DuckDuckGo)
+    Busca en Google usando la librería 'googlesearch'. Devuelve URLs de resultados.
     """
-    # Opción 1: DuckDuckGo (gratuita, sin API key, pero menos estructurada)
     try:
-        import requests
-        from bs4 import BeautifulSoup
-        # Esto es un ejemplo simple, no recomendado para producción
-        url = f"https://html.duckduckgo.com/html/?q={consulta}"
-        response = requests.get(url, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        resultados = soup.find_all('a', class_='result__a')[:num_resultados]
+        from googlesearch import search
+        resultados = []
+        for url in search(consulta, num_results=num_resultados, lang="es"):
+            resultados.append(url)
         if not resultados:
             return "No se encontraron resultados."
-        return "\n".join([r.get_text() for r in resultados])
+        return "\n".join(resultados)
     except Exception as e:
-        return f"Error en búsqueda: {e}"
+        logger.error(f"Error en búsqueda web: {e}")
+        return f"Error al buscar en web: {e}"
 
 def ejecutar_comando_seguro(comando: str) -> str:
     comandos_permitidos = {
@@ -404,7 +401,6 @@ def controlar_dispositivo(entidad: str, accion: str) -> str:
     except Exception as e:
         return f"Error conectando con Home Assistant: {str(e)}"
 
-# NUEVA HERRAMIENTA: Leer código
 def leer_codigo(archivo: str) -> str:
     """
     Lee el contenido de un archivo .py del repositorio (solo .py permitidos).
@@ -436,6 +432,7 @@ function_map = {
     "controlar_dispositivo": controlar_dispositivo,
     "predimensionar_estructura": predimensionar_estructura,
     "leer_codigo": leer_codigo,
+    "buscar_en_web": buscar_en_web,
 }
 
 # Definición de tools (para Gemini)
@@ -465,24 +462,6 @@ tools = [
                 "required": ["titulo", "contenido"]
             }
         ),
-        types.FunctionDeclaration(
-    name="buscar_en_web",
-    description="Busca información actualizada en internet sobre cualquier tema (videojuegos, noticias, etc.). Usa esto cuando necesites datos recientes o que no estén en mi conocimiento base.",
-    parameters={
-        "type": "object",
-        "properties": {
-            "consulta": {
-                "type": "string",
-                "description": "La consulta de búsqueda, clara y específica."
-            },
-            "num_resultados": {
-                "type": "integer",
-                "description": "Número de resultados a devolver (por defecto 3)."
-            }
-        },
-        "required": ["consulta"]
-    }
-),
         types.FunctionDeclaration(
             name="consultar_clima",
             description="Obtiene el clima actual de una ciudad.",
@@ -583,6 +562,24 @@ tools = [
                     }
                 },
                 "required": ["archivo"]
+            }
+        ),
+        types.FunctionDeclaration(
+            name="buscar_en_web",
+            description="Busca información actualizada en internet sobre cualquier tema (videojuegos, noticias, etc.). Usa esto cuando necesites datos recientes o que no estén en mi conocimiento base.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "consulta": {
+                        "type": "string",
+                        "description": "La consulta de búsqueda, clara y específica."
+                    },
+                    "num_resultados": {
+                        "type": "integer",
+                        "description": "Número de resultados a devolver (por defecto 3)."
+                    }
+                },
+                "required": ["consulta"]
             }
         )
     ])
@@ -798,7 +795,3 @@ def obtener_historial_reciente(limit=10):
         c.execute("SELECT role, content FROM memoria ORDER BY timestamp DESC LIMIT ?", (limit,))
         filas = c.fetchall()
     return [{"role": row[0], "content": row[1]} for row in reversed(filas)]
-
-# (Opcional) Cargar modelos al inicio
-# cargar_modelos_embedding()
-# cargar_modelos_generacion()
