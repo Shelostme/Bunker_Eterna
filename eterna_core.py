@@ -302,6 +302,26 @@ def listar_tareas() -> str:
     except Exception as e:
         return f"Error al listar tareas: {str(e)}"
 
+def buscar_en_web(consulta: str, num_resultados: int = 3) -> str:
+    """
+    Busca información en internet usando la API de Bing Search.
+    (Requiere suscripción a Azure, pero hay alternativas gratuitas como DuckDuckGo)
+    """
+    # Opción 1: DuckDuckGo (gratuita, sin API key, pero menos estructurada)
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+        # Esto es un ejemplo simple, no recomendado para producción
+        url = f"https://html.duckduckgo.com/html/?q={consulta}"
+        response = requests.get(url, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        resultados = soup.find_all('a', class_='result__a')[:num_resultados]
+        if not resultados:
+            return "No se encontraron resultados."
+        return "\n".join([r.get_text() for r in resultados])
+    except Exception as e:
+        return f"Error en búsqueda: {e}"
+
 def ejecutar_comando_seguro(comando: str) -> str:
     comandos_permitidos = {
         'date': ['date'],
