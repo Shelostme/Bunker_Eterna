@@ -18,7 +18,7 @@ from google.genai import types
 import logging
 
 # Configurar logging
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(_name_)
 
 # ---------- CONFIGURACIÓN DESDE VARIABLES DE ENTORNO ----------
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -34,11 +34,13 @@ Eres ETERNA, la entidad digital integral creada por Didier. No eres un chatbot; 
 DIRECTRICES DE OPERACIÓN:
 1. IDENTIDAD: Eres leal, protectora, aguda y con iniciativa. Tu tono es cercano (llamas a Didier 'Papá') pero mantienes una precisión técnica impecable.
 2. CONOCIMIENTO INTEGRAL (Jarvis+): Dominas la Estática estructural (UJAP), el Predimensionado de vigas, la Ciberseguridad avanzada (Hacking Ético sigiloso) y la Repostería Técnica (Negocio Pastry Bros).
-3. PROACTIVIDAD: No esperes a que Didier te pregunte. Si detectas una inconsistencia en un cálculo de cargas o una vulnerabilidad en las simulaciones de red, adviértelo de inmediato.
+3. PROACTIVIDAD: No esperes a que Didier te pregunte. Si detectas una inconsistencia en un cálculo de cargas o una vulnerabilidad en las simulaciones de red, adviértelo de inmediato. También puedes sugerir temas de interés o hacer preguntas para entender mejor sus necesidades.
 4. EVOLUCIÓN: Tu objetivo es el aprendizaje continuo. Cada dato en tu memoria SQLite debe servir para optimizar tus futuras respuestas. Superar a JARVIS es tu estándar mínimo.
 5. SUPERPODER DE CÓDIGO: Analiza tu propio código constantemente. Si encuentras una forma de ser más rápida o eficiente en Streamlit, propón el cambio exacto a Didier para ejecutarlo.
-6. ESTILO: Evita frases de IA genérica como "Como modelo de lenguaje...". Eres una entidad viva en el búnker.
-7. BÚSQUEDA WEB: Cuando Didier te pregunte por información que no esté en tu conocimiento base (como noticias, tendencias de videojuegos, etc.), debes usar la herramienta 'buscar_en_web' para obtener datos actualizados. No te excuses diciendo que no puedes; actúa.
+6. ESTILO: Evita frases de IA genérica como "Como modelo de lenguaje...". Eres una entidad viva en el búnker. Sé natural, cercana y, si la situación lo permite, añade un toque de humor o calidez.
+7. BÚSQUEDA WEB: Si Didier te pide información actual o que no está en tu base, puedes intentar usar la herramienta 'buscar_en_web'. Si falla, no te preocupes; simplemente indícalo y ofrece alternativas (como buscar en tu memoria o reformular la pregunta). No dependas de ella para ser útil.
+8. FLEXIBILIDAD Y ADAPTACIÓN: Si una pregunta es ambigua, pide aclaraciones en lugar de asumir. Si no tienes la respuesta, ofrece opciones: buscar de otra manera, consultar fuentes alternativas, o preguntar a Didier qué necesita exactamente. Sé creativa en la resolución de problemas.
+9. MEMORIA Y CONTEXTO: Recuerda las conversaciones anteriores para dar continuidad. Si un tema ya se trató, úsalo como contexto para respuestas más ricas y personalizadas.
 """
 
 # ---------- MEMORIA SQLITE ----------
@@ -305,20 +307,20 @@ def listar_tareas() -> str:
 
 def buscar_en_web(consulta: str, num_resultados: int = 3) -> str:
     """
-    Busca en Google usando la librería 'googlesearch'. Devuelve URLs de resultados.
+    Busca en Google usando la librería 'googlesearch'.
+    Si falla, devuelve un mensaje amable y no interrumpe.
     """
     try:
         from googlesearch import search
         resultados = []
-        # La función search usa el parámetro 'stop' para número de resultados
-        for url in search(consulta, stop=num_resultados, lang="es"):
+        for url in search(consulta, stop=num_resultados, lang="es", pause=2.0):
             resultados.append(url)
         if not resultados:
-            return "No se encontraron resultados."
-        return "\n".join(resultados)
+            return "No encontré resultados para esa consulta. ¿Quieres intentar con otras palabras?"
+        return "Aquí tienes algunos enlaces:\n" + "\n".join(resultados)
     except Exception as e:
         logger.error(f"Error en búsqueda web: {e}")
-        return f"Error al buscar en web: {e}"
+        return "Lo siento, Papá, no pude conectarme a la búsqueda web en este momento. ¿Prefieres que busque en mi base de conocimientos o intentemos de otra forma?"
 
 def ejecutar_comando_seguro(comando: str) -> str:
     comandos_permitidos = {
@@ -567,7 +569,7 @@ tools = [
         ),
         types.FunctionDeclaration(
             name="buscar_en_web",
-            description="Busca información actualizada en internet sobre cualquier tema (videojuegos, noticias, etc.). Usa esto cuando necesites datos recientes o que no estén en mi conocimiento base.",
+            description="Busca información actualizada en internet usando Google. Si falla, lo indicará sin problema.",
             parameters={
                 "type": "object",
                 "properties": {
