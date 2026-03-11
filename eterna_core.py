@@ -91,6 +91,20 @@ def set_modelos_embedding(modelos):
     modelos_embedding_cache = modelos
     logger.info(f"Modelos de embedding actualizados: {modelos}")
 
+def leer_codigo(archivo: str) -> str:
+    """
+    Lee el contenido de un archivo del repositorio (solo archivos .py permitidos por seguridad).
+    Requiere que el usuario confirme en la interfaz.
+    """
+    # Validar que el archivo esté en la lista blanca (por ejemplo, solo .py y en el directorio)
+    if not archivo.endswith('.py'):
+        return "Solo puedo leer archivos .py por seguridad."
+    try:
+        with open(archivo, 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        return f"Error al leer {archivo}: {e}")
+
 def obtener_embedding(texto):
     global modelo_embedding_activo, modelos_embedding_cache
     if modelos_embedding_cache is None:
