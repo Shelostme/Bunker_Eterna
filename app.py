@@ -35,7 +35,7 @@ else:
     except Exception as e:
         logger.error(f"Error cargando secrets: {e}")
 
-# Inicializar modelos
+# Inicializar modelos (solo una vez)
 if 'modelos_cargados' not in st.session_state:
     with st.spinner("Cargando modelos..."):
         cargar_modelos_embedding()
