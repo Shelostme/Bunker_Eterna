@@ -17,8 +17,8 @@ from google import genai
 from google.genai import types
 import logging
 
-# Configurar logging (usando _name_ correctamente)
-logger = logging.getLogger(__name__)
+# Configurar logging
+logger = logging.getLogger(_name_)
 
 # ---------- CONFIGURACIÓN DESDE VARIABLES DE ENTORNO ----------
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -91,38 +91,24 @@ def set_modelos_embedding(modelos):
     modelos_embedding_cache = modelos
     logger.info(f"Modelos de embedding actualizados: {modelos}")
 
-def leer_codigo(archivo: str) -> str:
-    """
-    Lee el contenido de un archivo del repositorio (solo archivos .py permitidos por seguridad).
-    Requiere que el usuario confirme en la interfaz.
-    """
-    # Validar que el archivo esté en la lista blanca (por ejemplo, solo .py y en el directorio)
-    if not archivo.endswith('.py'):
-        return "Solo puedo leer archivos .py por seguridad."
-    try:
-        with open(archivo, 'r', encoding='utf-8') as f:
-            return f.read()
-    except Exception as e:
-        return f"Error al leer {archivo}: {e}")
-
 def obtener_embedding(texto):
     global modelo_embedding_activo, modelos_embedding_cache
     if modelos_embedding_cache is None:
         logger.warning("No hay modelos de embedding en caché")
         return None
-    
+
     with embedding_lock:
         if modelo_embedding_activo and modelo_embedding_activo in modelos_embedding_cache:
             modelos_a_probar = [modelo_embedding_activo] + [m for m in modelos_embedding_cache if m != modelo_embedding_activo]
         else:
             modelos_a_probar = modelos_embedding_cache
-    
+
     headers = {'Content-Type': 'application/json'}
     api_key = GOOGLE_API_KEY
-    
+
     for modelo_completo in modelos_a_probar:
         modelo = modelo_completo.replace('models/', '')
-        
+
         # Intentar con embedContent
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:embedContent?key={api_key}"
         payload = {
@@ -147,7 +133,7 @@ def obtener_embedding(texto):
         except Exception as e:
             logger.debug(f"Error con embedContent en {modelo}: {e}")
             pass
-        
+
         # Si falla, intentar con embedText
         url_text = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:embedText?key={api_key}"
         payload_text = {"text": texto}
@@ -164,7 +150,7 @@ def obtener_embedding(texto):
         except Exception as e:
             logger.debug(f"Error con embedText en {modelo}: {e}")
             pass
-    
+
     logger.warning("No se pudo obtener embedding con ningún modelo")
     return None
 
@@ -173,9 +159,9 @@ def guardar_embedding(texto):
     vector = obtener_embedding(texto)
     if vector is None:
         return None
-    
+
     dim_vector = len(vector)
-    
+
     with index_lock:
         if index is None:
             index = faiss.IndexFlatL2(dim_vector)
@@ -189,11 +175,11 @@ def guardar_embedding(texto):
                 else:
                     logger.error(f"Conflicto de dimensiones: embedding {dim_vector} vs índice {dim_index} con {index.ntotal} vectores. No se guardará.")
                     return None
-        
+
         index.add(np.array([vector]).astype('float32'))
         faiss.write_index(index, index_path)
         logger.info(f"Embedding guardado, ahora hay {index.ntotal} vectores")
-    
+
     with db_lock:
         c = conn.cursor()
         c.execute("INSERT INTO textos (contenido) VALUES (?)", (texto,))
@@ -205,15 +191,15 @@ def buscar_textos_similares(consulta, k=3):
     if index is None or index.ntotal == 0:
         logger.info("Índice FAISS vacío, no se busca contexto")
         return ""
-    
+
     vector = obtener_embedding(consulta)
     if vector is None:
         logger.warning("No se pudo obtener embedding para la consulta")
         return ""
-    
+
     with index_lock:
         D, I = index.search(np.array([vector]).astype('float32'), k)
-    
+
     textos = []
     with db_lock:
         c = conn.cursor()
@@ -398,6 +384,30 @@ def controlar_dispositivo(entidad: str, accion: str) -> str:
     except Exception as e:
         return f"Error conectando con Home Assistant: {str(e)}"
 
+# NUEVA HERRAMIENTA: Leer código (con autorización)
+def leer_codigo(archivo: str) -> str:
+    """
+    Lee el contenido de un archivo del repositorio (solo archivos .py permitidos por seguridad).
+    Útil para que ETERNA pueda auditar su propio código y proponer mejoras.
+    """
+    # Validar que el archivo esté en el directorio actual y sea .py
+    if not archivo.endswith('.py'):
+        return "Solo puedo leer archivos .py por seguridad."
+    # Evitar rutas con '..' para salirse del directorio
+    if '..' in archivo or archivo.startswith('/'):
+        return "Acceso no permitido a rutas externas."
+    try:
+        with open(archivo, 'r', encoding='utf-8') as f:
+            contenido = f.read()
+        # Podrías limitar la longitud si es muy grande
+        if len(contenido) > 10000:
+            contenido = contenido[:10000] + "\n... (archivo truncado)"
+        return f"python\n{contenido}\n"
+    except FileNotFoundError:
+        return f"Error: No se encontró el archivo '{archivo}'"
+    except Exception as e:
+        return f"Error al leer {archivo}: {e}"
+
 # Mapeo de herramientas
 function_map = {
     "calcular_predimensionado_viga": calcular_predimensionado_viga,
@@ -407,8 +417,9 @@ function_map = {
     "listar_tareas": listar_tareas,
     "ejecutar_comando_seguro": ejecutar_comando_seguro,
     "enviar_email_real": enviar_email_real,
-    "controlar_dispositivo": controlar_dispositivo,   # <-- coma añadida
+    "controlar_dispositivo": controlar_dispositivo,
     "predimensionar_estructura": predimensionar_estructura,
+    "leer_codigo": leer_codigo,
 }
 
 # Definición de tools (para Gemini)
@@ -491,29 +502,29 @@ tools = [
             }
         ),
         types.FunctionDeclaration(
-    name="predimensionar_estructura",
-    description="Predimensiona elementos estructurales (vigas, columnas, losas, zapatas, pedestales, escaleras) según normativa venezolana (COVENIN, Manual MINDUR). Usa argumentos según el tipo.",
-    parameters={
-        "type": "object",
-        "properties": {
-            "tipo": {
-                "type": "string",
-                "enum": ["viga", "columna", "losa", "zapata", "pedestal", "escalera"],
-                "description": "Tipo de elemento a predimensionar"
-            },
-            "L": {"type": "number", "description": "Luz o longitud (m) – para vigas, losas, escaleras"},
-            "w": {"type": "number", "description": "Carga (kg/m) – para vigas"},
-            "P": {"type": "number", "description": "Carga axial (kg) – para columnas, zapatas, pedestales"},
-            "L_col": {"type": "number", "description": "Altura de columna (m) – para columnas"},
-            "L_menor": {"type": "number", "description": "Luz menor de losa (m) – para losas"},
-            "tipo_losa": {"type": "string", "enum": ["maciza", "nervada", "reticular"], "description": "Tipo de losa"},
-            "sobrecarga": {"type": "number", "description": "Sobrecarga de uso (kg/m²) – para losas"},
-            "q_adm": {"type": "number", "description": "Capacidad admisible del suelo (kg/cm²) – para zapatas"},
-            "zona_sismica": {"type": "boolean", "description": "Indica si es zona sísmica (por defecto True)"}
-        },
-        "required": ["tipo"]
-    }
-),
+            name="predimensionar_estructura",
+            description="Predimensiona elementos estructurales (vigas, columnas, losas, zapatas, pedestales, escaleras) según normativa venezolana (COVENIN, Manual MINDUR). Usa argumentos según el tipo.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "tipo": {
+                        "type": "string",
+                        "enum": ["viga", "columna", "losa", "zapata", "pedestal", "escalera"],
+                        "description": "Tipo de elemento a predimensionar"
+                    },
+                    "L": {"type": "number", "description": "Luz o longitud (m) – para vigas, losas, escaleras"},
+                    "w": {"type": "number", "description": "Carga (kg/m) – para vigas"},
+                    "P": {"type": "number", "description": "Carga axial (kg) – para columnas, zapatas, pedestales"},
+                    "L_col": {"type": "number", "description": "Altura de columna (m) – para columnas"},
+                    "L_menor": {"type": "number", "description": "Luz menor de losa (m) – para losas"},
+                    "tipo_losa": {"type": "string", "enum": ["maciza", "nervada", "reticular"], "description": "Tipo de losa"},
+                    "sobrecarga": {"type": "number", "description": "Sobrecarga de uso (kg/m²) – para losas"},
+                    "q_adm": {"type": "number", "description": "Capacidad admisible del suelo (kg/cm²) – para zapatas"},
+                    "zona_sismica": {"type": "boolean", "description": "Indica si es zona sísmica (por defecto True)"}
+                },
+                "required": ["tipo"]
+            }
+        ),
         types.FunctionDeclaration(
             name="controlar_dispositivo",
             description="Controla un dispositivo (luces, enchufes, etc.) a través de Home Assistant. Requiere configuración en variables de entorno.",
@@ -524,6 +535,20 @@ tools = [
                     "accion": {"type": "string", "description": "Acción: 'encender'/'on' o 'apagar'/'off'."}
                 },
                 "required": ["entidad", "accion"]
+            }
+        ),
+        types.FunctionDeclaration(
+            name="leer_codigo",
+            description="Lee el contenido de un archivo .py del repositorio. Útil para que ETERNA pueda auditar su propio código y proponer mejoras.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "archivo": {
+                        "type": "string",
+                        "description": "Nombre del archivo .py a leer (ej. 'eterna_core.py')."
+                    }
+                },
+                "required": ["archivo"]
             }
         )
     ])
@@ -585,23 +610,23 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                 contents.append(types.Content(role="user", parts=[types.Part(text=msg["content"])]))
             else:
                 contents.append(types.Content(role="model", parts=[types.Part(text=msg["content"])]))
-    
+
     if contexto:
         prompt_completo = f"Contexto relevante:\n{contexto}\n\nMensaje actual: {mensaje}"
     else:
         prompt_completo = mensaje
     contents.append(types.Content(role="user", parts=[types.Part(text=prompt_completo)]))
-    
+
     # Asegurar que los modelos de generación están cargados
     if modelos_generacion_cache is None:
         cargar_modelos_generacion()
-    
+
     # Filtrar modelos que ya fallaron
     modelos_a_probar = [m for m in modelos_generacion_cache if m not in modelos_generacion_blacklist]
     if not modelos_a_probar:
         logger.error("No hay modelos disponibles después de varios intentos")
         return "Error: No hay modelos de generación disponibles. Verifica tu API key."
-    
+
     for modelo_completo in modelos_a_probar:
         modelo = modelo_completo.replace('models/', '')
         try:
@@ -618,7 +643,7 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                 ),
                 contents=contents
             )
-            
+
             if response.function_calls:
                 logger.info(f"Llamada a función detectada: {response.function_calls}")
                 function_responses = []
@@ -640,7 +665,7 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                                 response={"error": f"Función {func_name} no disponible"}
                             )
                         )
-                
+
                 contents.append(
                     types.Content(
                         role="model",
@@ -650,7 +675,7 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                 contents.append(
                     types.Content(role="function", parts=function_responses)
                 )
-                
+
                 final_response = client.models.generate_content(
                     model=modelo,
                     config=types.GenerateContentConfig(
@@ -671,7 +696,7 @@ def generar_respuesta(mensaje, contexto="", historial=None):
             logger.error(f"Error con modelo {modelo}: {e}")
             modelos_generacion_blacklist.add(modelo_completo)
             continue
-    
+
     return "Error: No se pudo generar respuesta con ningún modelo disponible."
 
 # ---------- PLANIFICACIÓN ----------
