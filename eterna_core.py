@@ -18,7 +18,7 @@ from google.genai import types
 import logging
 
 # Configurar logging
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(_name_)
 
 # ---------- CONFIGURACIÓN DESDE VARIABLES DE ENTORNO ----------
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -310,7 +310,8 @@ def buscar_en_web(consulta: str, num_resultados: int = 3) -> str:
     try:
         from googlesearch import search
         resultados = []
-        for url in search(consulta, num_results=num_resultados, lang="es"):
+        # La función search usa el parámetro 'stop' para número de resultados
+        for url in search(consulta, stop=num_resultados, lang="es"):
             resultados.append(url)
         if not resultados:
             return "No se encontraron resultados."
