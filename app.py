@@ -11,11 +11,9 @@ from eterna_core import (
     cargar_modelos_generacion,
 )
 
-# Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(_name_)
 
-# Cargar variables de entorno (para local) o usar st.secrets (para nube)
 if os.path.exists(".env"):
     from dotenv import load_dotenv
     load_dotenv()
@@ -35,7 +33,6 @@ else:
     except Exception as e:
         logger.error(f"Error cargando secrets: {e}")
 
-# Inicializar modelos (solo una vez)
 if 'modelos_cargados' not in st.session_state:
     with st.spinner("Cargando modelos..."):
         cargar_modelos_embedding()
@@ -46,7 +43,6 @@ if 'modelos_cargados' not in st.session_state:
 st.set_page_config(page_title="ETERNA", layout="wide")
 st.markdown("<style>body { background-color: #0e1117; color: #00ff00; }</style>", unsafe_allow_html=True)
 
-# Diagnóstico
 with st.expander("🔧 Diagnóstico de modelos", expanded=False):
     if st.button("Recargar modelos de embedding"):
         with st.spinner("Recargando..."):
@@ -57,23 +53,19 @@ with st.expander("🔧 Diagnóstico de modelos", expanded=False):
             cargar_modelos_generacion()
         st.success("Modelos de generación recargados")
 
-# Mantenimiento
 with st.expander("🛠️ Mantenimiento de memoria", expanded=False):
     if st.button("Reiniciar índice FAISS (borrar todos los vectores)"):
         resultado = reiniciar_indice_faiss()
         st.success(resultado)
         st.rerun()
 
-# Inicializar historial
 if "mensajes" not in st.session_state:
     st.session_state.mensajes = []
 
-# Mostrar historial
 for msg in st.session_state.mensajes:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# Entrada de usuario
 if prompt := st.chat_input("Háblame, Didier..."):
     st.session_state.mensajes.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
