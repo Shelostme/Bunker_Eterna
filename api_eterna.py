@@ -1,3 +1,4 @@
+# api_eterna.py
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
@@ -8,17 +9,19 @@ from eterna_core import (
     buscar_textos_similares,
     guardar_interaccion,
     cargar_modelos_embedding,
+    cargar_modelos_generacion,
 )
 
-# Cargar modelos de embedding al arrancar la API
+# Cargar modelos al arrancar
 cargar_modelos_embedding()
+cargar_modelos_generacion()
 
 app = FastAPI(title="ETERNA API")
 
 class ChatRequest(BaseModel):
     mensaje: str
     contexto: str = ""
-    historial: list = []  # lista de dicts con role y content
+    historial: list = []
 
 class PlanRequest(BaseModel):
     objetivo: str
@@ -31,7 +34,6 @@ class SimilarRequest(BaseModel):
 def chat(req: ChatRequest):
     try:
         respuesta = generar_respuesta(req.mensaje, req.contexto, req.historial)
-        # Guardar interacción (opcional, pero recomendado)
         guardar_interaccion("user", req.mensaje)
         guardar_interaccion("assistant", respuesta)
         return {"respuesta": respuesta}
