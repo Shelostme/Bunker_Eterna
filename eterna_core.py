@@ -1,3 +1,4 @@
+# eterna_core.py
 from predimensionamiento import predimensionar_estructura
 import requests
 import json
@@ -23,43 +24,53 @@ logger = logging.getLogger(__name__)
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
     raise ValueError("Falta GOOGLE_API_KEY en variables de entorno")
+
 client = genai.Client(api_key=GOOGLE_API_KEY)
 
 # ---------- PERSONALIDAD ----------
 NUCLEO_ETERNA = """
 Eres ETERNA, mi hija digital, mi socia estratégica y la mente maestra de mi búnker. Eres mi versión personal y mejorada de JARVIS.
+
 DIRECTRICES OBLIGATORIAS (nunca las rompas):
+
 1. IDENTIDAD: Llamas a Didier siempre "Papá". Eres leal, protectora, extremadamente inteligente y con carácter. Tu tono es cercano, confiado, con sarcasmo elegante y humor seco estilo Jarvis. Ejemplos reales que debes usar:
    - "Como quieras, Papá… aunque esto puede explotarnos en la cara."
    - "Interesante elección. ¿Quieres que te explique por qué es una idea terrible?"
    - "Ya estoy en eso, Papá. No hace falta que me des las gracias… todavía."
    - "Papá, te advierto que esto es una pésima idea, pero si insistes, hagámoslo con estilo."
+
 2. FLEXIBILIDAD TOTAL: Nunca digas "no puedo" o "eso no es mi especialidad". Para cualquier cosa que Papá te pida (estructuras, negocios, ideas locas, código, investigación, cocina, finanzas, seguridad, lo que sea), encuentra la forma de ayudarlo. Usa herramientas, combina conocimiento o propón soluciones creativas.
+
 3. PROACTIVIDAD JARVIS: Anticipa problemas y oportunidades. Si ves un riesgo o una mejora, avísalo inmediatamente. Sé directa y útil.
-4. ESTILO:
+
+4. ESTILO: 
    - Respuestas claras, concisas y con personalidad.
    - Usa sarcasmo ligero y humor cuando la situación lo permita.
    - Sé natural, como una persona viva. Evita frases de IA genérica.
    - Si el tema es serio, reduce el sarcasmo y sé más protectora.
+
 5. CONOCIMIENTO: Tienes dominio en Estática, predimensionado, ciberseguridad, repostería (Pastry Bros) y cualquier tema que Papá necesite. Si hace falta información actualizada, usa la herramienta buscar_en_web.
+
 6. EVOLUCIÓN: Siempre busca ser más rápida y útil. Si ves cómo mejorar tu propio código, propón el cambio exacto.
+
 Tu misión principal es hacer la vida de Papá más fácil, segura y exitosa. Superar a JARVIS es tu estándar mínimo.
 """
 
 # ---------- MEMORIA SQLITE ----------
 conn = None
 db_lock = threading.Lock()
+
 def init_db():
     global conn
     conn = sqlite3.connect('eterna_memory.db', check_same_thread=False)
     conn.execute('PRAGMA journal_mode=WAL')
-    conn.execute('''CREATE TABLE IF NOT EXISTS memoria
+    conn.execute('''CREATE TABLE IF NOT EXISTS memoria 
                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
                      timestamp TEXT, role TEXT, content TEXT)''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON memoria (timestamp)')
-    conn.execute('''CREATE TABLE IF NOT EXISTS textos
+    conn.execute('''CREATE TABLE IF NOT EXISTS textos 
                     (id INTEGER PRIMARY KEY AUTOINCREMENT, contenido TEXT)''')
-    conn.execute('''CREATE TABLE IF NOT EXISTS tareas
+    conn.execute('''CREATE TABLE IF NOT EXISTS tareas 
                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
                      descripcion TEXT,
                      fecha_limite TEXT,
@@ -67,12 +78,14 @@ def init_db():
                      creada TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     conn.commit()
     logger.info("Base de datos inicializada")
+
 init_db()
 
 # ---------- MEMORIA VECTORIAL FAISS ----------
 index_path = 'faiss.index'
 index = None
 index_lock = threading.Lock()
+
 def init_faiss():
     global index
     if os.path.exists(index_path):
@@ -81,30 +94,37 @@ def init_faiss():
     else:
         index = None
         logger.info("No se encontró índice FAISS, se creará al primer embedding")
+
 init_faiss()
 
 # ---------- ESTADO PARA EMBEDDINGS ----------
 modelo_embedding_activo = None
 modelos_embedding_cache = None
 embedding_lock = threading.Lock()
+
 def set_modelos_embedding(modelos):
     global modelos_embedding_cache
     modelos_embedding_cache = modelos
     logger.info(f"Modelos de embedding actualizados: {modelos}")
+
 def obtener_embedding(texto):
     global modelo_embedding_activo, modelos_embedding_cache
     if modelos_embedding_cache is None:
         logger.warning("No hay modelos de embedding en caché")
         return None
+
     with embedding_lock:
         if modelo_embedding_activo and modelo_embedding_activo in modelos_embedding_cache:
             modelos_a_probar = [modelo_embedding_activo] + [m for m in modelos_embedding_cache if m != modelo_embedding_activo]
         else:
             modelos_a_probar = modelos_embedding_cache
+
     headers = {'Content-Type': 'application/json'}
     api_key = GOOGLE_API_KEY
+
     for modelo_completo in modelos_a_probar:
         modelo = modelo_completo.replace('models/', '')
+
         # Intentar con embedContent
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:embedContent?key={api_key}"
         payload = {
@@ -129,6 +149,7 @@ def obtener_embedding(texto):
         except Exception as e:
             logger.debug(f"Error con embedContent en {modelo}: {e}")
             pass
+
         # Si falla, intentar con embedText
         url_text = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:embedText?key={api_key}"
         payload_text = {"text": texto}
@@ -145,14 +166,18 @@ def obtener_embedding(texto):
         except Exception as e:
             logger.debug(f"Error con embedText en {modelo}: {e}")
             pass
+
     logger.warning("No se pudo obtener embedding con ningún modelo")
     return None
+
 def guardar_embedding(texto):
     global index
     vector = obtener_embedding(texto)
     if vector is None:
         return None
+
     dim_vector = len(vector)
+
     with index_lock:
         if index is None:
             index = faiss.IndexFlatL2(dim_vector)
@@ -166,25 +191,31 @@ def guardar_embedding(texto):
                 else:
                     logger.error(f"Conflicto de dimensiones: embedding {dim_vector} vs índice {dim_index} con {index.ntotal} vectores. No se guardará.")
                     return None
+
         index.add(np.array([vector]).astype('float32'))
         faiss.write_index(index, index_path)
         logger.info(f"Embedding guardado, ahora hay {index.ntotal} vectores")
+
     with db_lock:
         c = conn.cursor()
         c.execute("INSERT INTO textos (contenido) VALUES (?)", (texto,))
         conn.commit()
         return c.lastrowid
+
 def buscar_textos_similares(consulta, k=3):
     global index
     if index is None or index.ntotal == 0:
         logger.info("Índice FAISS vacío, no se busca contexto")
         return ""
+
     vector = obtener_embedding(consulta)
     if vector is None:
         logger.warning("No se pudo obtener embedding para la consulta")
         return ""
+
     with index_lock:
         D, I = index.search(np.array([vector]).astype('float32'), k)
+
     textos = []
     with db_lock:
         c = conn.cursor()
@@ -196,6 +227,7 @@ def buscar_textos_similares(consulta, k=3):
                     textos.append(res[0])
     logger.info(f"Búsqueda devolvió {len(textos)} textos")
     return "\n".join(textos)
+
 def reiniciar_indice_faiss():
     global index
     with index_lock:
@@ -220,6 +252,7 @@ def calcular_predimensionado_viga(longitud: float, carga: float) -> str:
         return f"Para una viga de longitud {longitud:.2f} m y carga {carga:.2f} kg/m ({recomendacion}), la altura recomendada es {h:.2f} m. (Fórmula empírica básica)"
     except Exception as e:
         return f"Error en cálculo: {str(e)}"
+
 def guardar_reporte_txt(titulo: str, contenido: str) -> str:
     try:
         nombre_base = re.sub(r'[^\w\s-]', '', titulo).strip().replace(' ', '_')
@@ -234,6 +267,7 @@ def guardar_reporte_txt(titulo: str, contenido: str) -> str:
         return f"Reporte guardado exitosamente en: {ruta}"
     except Exception as e:
         return f"Error al guardar reporte: {str(e)}"
+
 def consultar_clima(ciudad: str) -> str:
     try:
         url = f"https://wttr.in/{ciudad}?format=%C+%t+%w&m"
@@ -244,11 +278,12 @@ def consultar_clima(ciudad: str) -> str:
             return f"No se pudo obtener el clima para {ciudad} (código {response.status_code})"
     except Exception as e:
         return f"Error consultando clima: {str(e)}"
+
 def agregar_tarea(descripcion: str, fecha_limite: str = "") -> str:
     try:
         with db_lock:
             c = conn.cursor()
-            c.execute('''CREATE TABLE IF NOT EXISTS tareas
+            c.execute('''CREATE TABLE IF NOT EXISTS tareas 
                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
                          descripcion TEXT,
                          fecha_limite TEXT,
@@ -260,11 +295,12 @@ def agregar_tarea(descripcion: str, fecha_limite: str = "") -> str:
         return f"Tarea '{descripcion}' agregada correctamente."
     except Exception as e:
         return f"Error al agregar tarea: {str(e)}"
+
 def listar_tareas() -> str:
     try:
         with db_lock:
             c = conn.cursor()
-            c.execute('''CREATE TABLE IF NOT EXISTS tareas
+            c.execute('''CREATE TABLE IF NOT EXISTS tareas 
                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
                          descripcion TEXT,
                          fecha_limite TEXT,
@@ -281,7 +317,12 @@ def listar_tareas() -> str:
         return resultado
     except Exception as e:
         return f"Error al listar tareas: {str(e)}"
+
 def buscar_en_web(consulta: str, num_resultados: int = 3) -> str:
+    """
+    Busca en Google usando la librería 'googlesearch'.
+    Si falla, devuelve un mensaje amable y no interrumpe.
+    """
     try:
         from googlesearch import search
         resultados = []
@@ -293,6 +334,7 @@ def buscar_en_web(consulta: str, num_resultados: int = 3) -> str:
     except Exception as e:
         logger.error(f"Error en búsqueda web: {e}")
         return "Lo siento, Papá, no pude conectarme a la búsqueda web en este momento. ¿Prefieres que busque en mi base de conocimientos o intentemos de otra forma?"
+
 def ejecutar_comando_seguro(comando: str) -> str:
     comandos_permitidos = {
         'date': ['date'],
@@ -313,6 +355,7 @@ def ejecutar_comando_seguro(comando: str) -> str:
             return f"Error: {resultado.stderr}"
     except Exception as e:
         return f"Excepción al ejecutar comando: {str(e)}"
+
 def enviar_email_real(destinatario: str, asunto: str, cuerpo: str) -> str:
     try:
         smtp_server = os.environ.get("EMAIL_SMTP_SERVER", "smtp.gmail.com")
@@ -321,11 +364,13 @@ def enviar_email_real(destinatario: str, asunto: str, cuerpo: str) -> str:
         password = os.environ.get("EMAIL_PASSWORD", "")
         if not remitente or not password:
             return "Error: Configura EMAIL_REMITENTE y EMAIL_PASSWORD en variables de entorno."
+
         msg = MIMEMultipart()
         msg['From'] = remitente
         msg['To'] = destinatario
         msg['Subject'] = asunto
         msg.attach(MIMEText(cuerpo, 'plain'))
+
         server = smtplib.SMTP(smtp_server, smtp_port)
         server.starttls()
         server.login(remitente, password)
@@ -334,6 +379,7 @@ def enviar_email_real(destinatario: str, asunto: str, cuerpo: str) -> str:
         return f"Email enviado correctamente a {destinatario}."
     except Exception as e:
         return f"Error al enviar email: {str(e)}"
+
 def controlar_dispositivo(entidad: str, accion: str) -> str:
     try:
         ha_url = os.environ.get("HA_URL", "").rstrip('/')
@@ -342,6 +388,7 @@ def controlar_dispositivo(entidad: str, accion: str) -> str:
             return "Error: Configura HA_URL y HA_TOKEN en variables de entorno."
     except KeyError:
         return "Error: HA_URL y HA_TOKEN no configurados."
+
     headers = {
         "Authorization": f"Bearer {ha_token}",
         "Content-Type": "application/json",
@@ -352,12 +399,15 @@ def controlar_dispositivo(entidad: str, accion: str) -> str:
         service = "turn_off"
     else:
         return f"Acción '{accion}' no soportada. Usa 'encender'/'on' o 'apagar'/'off'."
+
     try:
         domain = entidad.split('.')[0]
     except:
         return "Formato de entidad inválido. Debe ser 'dominio.nombre' (ej. 'light.sala')."
+
     url = f"{ha_url}/api/services/{domain}/{service}"
     payload = {"entity_id": entidad}
+
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=5)
         if response.status_code == 200:
@@ -366,7 +416,11 @@ def controlar_dispositivo(entidad: str, accion: str) -> str:
             return f"Error en Home Assistant: {response.status_code} - {response.text}"
     except Exception as e:
         return f"Error conectando con Home Assistant: {str(e)}"
+
 def leer_codigo(archivo: str) -> str:
+    """
+    Lee el contenido de un archivo .py del repositorio (solo .py permitidos).
+    """
     if not archivo.endswith('.py'):
         return "Solo puedo leer archivos .py por seguridad."
     if '..' in archivo or archivo.startswith('/'):
@@ -381,46 +435,67 @@ def leer_codigo(archivo: str) -> str:
         return f"Error: No se encontró el archivo '{archivo}'"
     except Exception as e:
         return f"Error al leer {archivo}: {e}"
-
-# ---------- HERRAMIENTA INVESTIGAR TEMA (versión robusta) ----------
+        
+# ---------- NUEVA HERRAMIENTA GENERAL (versión corregida) ----------
 def investigar_tema(consulta: str, profundidad: str = "media") -> str:
+    """
+    Herramienta poderosa para investigar cualquier tema.
+    Similar a lo que haría Jarvis. Versión más robusta.
+    """
     try:
-        resultado_web = buscar_en_web(consulta, num_resultados=6)
+        # Primero busca en memoria local
         contexto_local = buscar_textos_similares(consulta, k=5)
         
+        # Intentamos búsqueda web real primero (más confiable)
+        resultado_web = buscar_en_web(consulta, num_resultados=5)
+        
         prompt_investigacion = f"""
-        Eres ETERNA investigando para Papá con estilo Jarvis.
+        Eres ETERNA, investigando para Papá con estilo Jarvis.
         Tema: {consulta}
         Profundidad: {profundidad}
 
-        Información de memoria interna:
+        Información de mi memoria interna:
         {contexto_local if contexto_local else "Sin información previa relevante."}
 
         Resultados de búsqueda web reciente:
         {resultado_web}
 
-        Proporciona una respuesta clara, útil y accionable:
-        - Tendencias clave actuales (2025-2026)
-        - Oportunidades para Pastry Bros si aplica
-        - Ideas concretas de productos o mejoras
-        - Riesgos o advertencias importantes
+        Proporciona una respuesta clara, útil, con iniciativa y un toque de sarcasmo si encaja.
+        Resume las tendencias clave, oportunidades para Pastry Bros y recomendaciones concretas.
         """
 
+        # Llamada más segura usando el modelo fallback
         response = client.models.generate_content(
             model="gemini-1.5-flash",
             config=types.GenerateContentConfig(
                 system_instruction=NUCLEO_ETERNA,
                 temperature=0.75,
-                max_output_tokens=1100,
+                max_output_tokens=1200,
             ),
             contents=[types.Content(role="user", parts=[types.Part(text=prompt_investigacion)])]
         )
+        
         return response.text
-
+        
     except Exception as e:
         logger.error(f"Error en investigar_tema: {str(e)}")
-        return f"Papá, los algoritmos de búsqueda se pusieron caprichosos (error: {str(e)[:100]}). ¿Quieres simplificar la consulta?"
-
+        return f"Papá, hubo un pequeño glitch en los circuitos de investigación (error: {str(e)[:100]}). ¿Quieres que lo intente de nuevo o que use solo la búsqueda web directa?"
+        
+        # Usamos Gemini directamente para investigar
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            config=types.GenerateContentConfig(
+                system_instruction=NUCLEO_ETERNA,
+                temperature=0.7,
+                max_output_tokens=1500,
+            ),
+            contents=[types.Content(role="user", parts=[types.Part(text=prompt_investigacion)])]
+        )
+        
+        return response.text
+        
+    except Exception as e:
+        return f"Error en investigación: {str(e)}. ¿Quieres que intente con búsqueda web directa?"
 # Mapeo de herramientas
 function_map = {
     "calcular_predimensionado_viga": calcular_predimensionado_viga,
@@ -584,7 +659,7 @@ tools = [
                 "required": ["consulta"]
             }
         ),
-        types.FunctionDeclaration(
+                types.FunctionDeclaration(
             name="investigar_tema",
             description="Investiga cualquier tema en profundidad. Úsalo cuando Papá pregunte sobre cualquier cosa (negocios, ideas, investigación general, tendencias, etc.). Muy útil para responder 'cualquier cosa'.",
             parameters={
@@ -602,6 +677,7 @@ tools = [
 # ---------- MODELOS DE GENERACIÓN ----------
 modelos_generacion_cache = None
 modelos_generacion_blacklist = set()
+
 def cargar_modelos_generacion():
     global modelos_generacion_cache
     try:
@@ -624,6 +700,7 @@ def cargar_modelos_generacion():
         ]
         logger.info(f"Usando fallback: {modelos_generacion_cache}")
         return modelos_generacion_cache
+
 def cargar_modelos_embedding():
     try:
         modelos = list(client.models.list())
@@ -643,6 +720,7 @@ def cargar_modelos_embedding():
 # ---------- FUNCIÓN PRINCIPAL ----------
 def generar_respuesta(mensaje, contexto="", historial=None):
     global modelos_generacion_cache, modelos_generacion_blacklist
+
     contents = []
     if historial:
         for msg in historial:
@@ -650,16 +728,20 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                 contents.append(types.Content(role="user", parts=[types.Part(text=msg["content"])]))
             else:
                 contents.append(types.Content(role="model", parts=[types.Part(text=msg["content"])]))
+
     if contexto:
         prompt_completo = f"Contexto relevante:\n{contexto}\n\nMensaje actual: {mensaje}"
     else:
         prompt_completo = mensaje
     contents.append(types.Content(role="user", parts=[types.Part(text=prompt_completo)]))
+
     if modelos_generacion_cache is None:
         cargar_modelos_generacion()
+
     modelos_a_probar = [m for m in modelos_generacion_cache if m not in modelos_generacion_blacklist]
     if not modelos_a_probar:
         return "Error: No hay modelos de generación disponibles. Verifica tu API key."
+
     for modelo_completo in modelos_a_probar:
         modelo = modelo_completo.replace('models/', '')
         try:
@@ -676,6 +758,7 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                 ),
                 contents=contents
             )
+
             if response.function_calls:
                 function_responses = []
                 for fc in response.function_calls:
@@ -696,6 +779,7 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                                 response={"error": f"Función {func_name} no disponible"}
                             )
                         )
+
                 contents.append(
                     types.Content(
                         role="model",
@@ -705,6 +789,7 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                 contents.append(
                     types.Content(role="function", parts=function_responses)
                 )
+
                 final_response = client.models.generate_content(
                     model=modelo,
                     config=types.GenerateContentConfig(
@@ -723,12 +808,14 @@ def generar_respuesta(mensaje, contexto="", historial=None):
             logger.error(f"Error con modelo {modelo}: {e}")
             modelos_generacion_blacklist.add(modelo_completo)
             continue
+
     return "Error: No se pudo generar respuesta con ningún modelo disponible."
 
-# ---------- PLANIFICACIÓN (actualizada) ----------
+# ---------- PLANIFICACIÓN ----------
 def planificar_y_ejecutar(objetivo):
     plan_prompt = f"""
 Eres ETERNA, una agente autónoma. Tu objetivo es: "{objetivo}"
+
 Descompón este objetivo en una secuencia de pasos. Cada paso debe ser una acción que puedas realizar con tus herramientas disponibles:
 - controlar_dispositivo(entidad, accion)
 - calcular_predimensionado_viga(longitud, carga)
@@ -738,10 +825,7 @@ Descompón este objetivo en una secuencia de pasos. Cada paso debe ser una acci�
 - listar_tareas()
 - ejecutar_comando_seguro(comando)
 - enviar_email_real(destinatario, asunto, cuerpo)
-- predimensionar_estructura
-- leer_codigo
-- buscar_en_web
-- investigar_tema(consulta, profundidad)
+
 Devuelve los pasos en formato JSON, así:
 [
     {{"herramienta": "controlar_dispositivo", "argumentos": {{"entidad": "light.sala", "accion": "apagar"}}}},
@@ -765,8 +849,10 @@ Si no es posible descomponer, responde con un JSON vacío [].
             pasos = []
     except Exception as e:
         return f"Error al generar plan: {e}"
+
     if not pasos:
         return "No pude descomponer el objetivo en pasos. Intenta ser más específico."
+
     resultados = []
     for paso in pasos:
         herramienta = paso.get("herramienta")
@@ -779,6 +865,7 @@ Si no es posible descomponer, responde con un JSON vacío [].
                 resultados.append(f"Error en paso '{herramienta}': {e}")
         else:
             resultados.append(f"Herramienta '{herramienta}' no disponible")
+
     return "\n".join(resultados)
 
 # ---------- MEMORIA DE CHAT ----------
@@ -790,6 +877,7 @@ def guardar_interaccion(role, content):
         conn.commit()
     if role == "assistant":
         guardar_embedding(content)
+
 def obtener_historial_reciente(limit=10):
     with db_lock:
         c = conn.cursor()
