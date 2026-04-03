@@ -673,7 +673,7 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                 model=modelo,
                 config=types.GenerateContentConfig(
                     system_instruction=NUCLEO_ETERNA,
-                    temperature=0.9,
+                    temperature=0.85,
                     top_p=0.95,
                     top_k=40,
                     max_output_tokens=2048,
