@@ -435,7 +435,44 @@ def leer_codigo(archivo: str) -> str:
         return f"Error: No se encontró el archivo '{archivo}'"
     except Exception as e:
         return f"Error al leer {archivo}: {e}"
-
+        
+# ---------- NUEVA HERRAMIENTA GENERAL ----------
+def investigar_tema(consulta: str, profundidad: str = "media") -> str:
+    """
+    Herramienta poderosa para investigar cualquier tema.
+    Similar a lo que haría Jarvis.
+    """
+    try:
+        # Primero busca en memoria local (FAISS)
+        contexto_local = buscar_textos_similares(consulta, k=5)
+        
+        prompt_investigacion = f"""
+        Eres ETERNA investigando para Papá.
+        Tema: {consulta}
+        Profundidad solicitada: {profundidad}
+        
+        Usa la información de mi memoria local si es relevante:
+        {contexto_local if contexto_local else "No hay información previa relevante."}
+        
+        Proporciona una respuesta clara, útil y con iniciativa.
+        Si hace falta información actualizada, indícalo y usa buscar_en_web.
+        """
+        
+        # Usamos Gemini directamente para investigar
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            config=types.GenerateContentConfig(
+                system_instruction=NUCLEO_ETERNA,
+                temperature=0.7,
+                max_output_tokens=1500,
+            ),
+            contents=[types.Content(role="user", parts=[types.Part(text=prompt_investigacion)])]
+        )
+        
+        return response.text
+        
+    except Exception as e:
+        return f"Error en investigación: {str(e)}. ¿Quieres que intente con búsqueda web directa?"
 # Mapeo de herramientas
 function_map = {
     "calcular_predimensionado_viga": calcular_predimensionado_viga,
@@ -449,6 +486,7 @@ function_map = {
     "predimensionar_estructura": predimensionar_estructura,
     "leer_codigo": leer_codigo,
     "buscar_en_web": buscar_en_web,
+    "investigar_tema": investigar_tema,
 }
 
 # Definición de tools (para Gemini)
@@ -594,6 +632,18 @@ tools = [
                         "type": "integer",
                         "description": "Número de resultados a devolver (por defecto 3)."
                     }
+                },
+                "required": ["consulta"]
+            }
+        ),
+                types.FunctionDeclaration(
+            name="investigar_tema",
+            description="Investiga cualquier tema en profundidad. Úsalo cuando Papá pregunte sobre cualquier cosa (negocios, ideas, investigación general, tendencias, etc.). Muy útil para responder 'cualquier cosa'.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "consulta": {"type": "string", "description": "La pregunta o tema a investigar."},
+                    "profundidad": {"type": "string", "description": "Nivel de profundidad: 'baja', 'media' o 'alta'. Por defecto 'media'."}
                 },
                 "required": ["consulta"]
             }
