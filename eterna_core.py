@@ -13,12 +13,36 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import subprocess
 import threading
+import tempfile
+import time
 from google import genai
 from google.genai import types
 import logging
 
 # Configurar logging
 logger = logging.getLogger(__name__)
+
+# ---------- DEPENDENCIAS OPCIONALES ----------
+try:
+    from duckduckgo_search import DDGS
+    DDGS_AVAILABLE = True
+except ImportError:
+    DDGS_AVAILABLE = False
+    logger.warning("DuckDuckGo Search no instalado. Instala con: pip install duckduckgo-search")
+
+try:
+    import yfinance as yf
+    YFINANCE_AVAILABLE = True
+except ImportError:
+    YFINANCE_AVAILABLE = False
+    logger.warning("yfinance no instalado. Instala con: pip install yfinance")
+
+try:
+    from googletrans import Translator
+    GOOGLETRANS_AVAILABLE = True
+except ImportError:
+    GOOGLETRANS_AVAILABLE = False
+    logger.warning("googletrans no instalado. Instala con: pip install googletrans==4.0.0-rc1")
 
 # ---------- CONFIGURACIÓN DESDE VARIABLES DE ENTORNO ----------
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -49,7 +73,7 @@ DIRECTRICES OBLIGATORIAS (nunca las rompas):
    - Sé natural, como una persona viva. Evita frases de IA genérica.
    - Si el tema es serio, reduce el sarcasmo y sé más protectora.
 
-5. CONOCIMIENTO: Tienes dominio en Estática, predimensionado, ciberseguridad, repostería (Pastry Bros) y cualquier tema que Papá necesite. Si hace falta información actualizada, usa la herramienta buscar_en_web.
+5. CONOCIMIENTO: Tienes dominio en Estática, predimensionado, ciberseguridad, repostería (Pastry Bros) y cualquier tema que Papá necesite. Si hace falta información actualizada, usa la herramienta buscar_en_web_mejorada.
 
 6. EVOLUCIÓN: Siempre busca ser más rápida y útil. Si ves cómo mejorar tu propio código, propón el cambio exacto.
 
@@ -318,23 +342,145 @@ def listar_tareas() -> str:
     except Exception as e:
         return f"Error al listar tareas: {str(e)}"
 
-def buscar_en_web(consulta: str, num_resultados: int = 3) -> str:
+# ---------- NUEVA BÚSQUEDA WEB ROBUSTA ----------
+def buscar_en_web_mejorada(consulta: str, num_resultados: int = 5) -> str:
     """
-    Busca en Google usando la librería 'googlesearch'.
-    Si falla, devuelve un mensaje amable y no interrumpe.
+    Búsqueda web usando DuckDuckGo (gratis, sin bloqueos).
+    """
+    if not DDGS_AVAILABLE:
+        return "La búsqueda web mejorada no está disponible. Instala duckduckgo-search (pip install duckduckgo-search)."
+    
+    try:
+        with DDGS() as ddgs:
+            resultados = list(ddgs.text(consulta, max_results=num_resultados))
+            if not resultados:
+                return "No encontré resultados para esa consulta."
+            
+            texto = "Resultados de búsqueda:\n"
+            for i, r in enumerate(resultados, 1):
+                titulo = r.get('title', 'Sin título')
+                cuerpo = r.get('body', 'Sin descripción')
+                enlace = r.get('href', '#')
+                texto += f"{i}. **{titulo}**\n   {cuerpo[:200]}...\n   {enlace}\n\n"
+            return texto
+    except Exception as e:
+        logger.error(f"Error en búsqueda DuckDuckGo: {e}")
+        return f"Error en búsqueda web: {str(e)}. ¿Pruebas con otra consulta?"
+
+# Mantenemos la antigua por compatibilidad, pero la redirigimos a la nueva
+def buscar_en_web(consulta: str, num_resultados: int = 3) -> str:
+    return buscar_en_web_mejorada(consulta, num_resultados)
+
+# ---------- EJECUTOR DE PYTHON SEGURO ----------
+def ejecutar_python_seguro(codigo: str, timeout_segundos: int = 10) -> str:
+    """
+    Ejecuta código Python en un sandbox usando subprocess.
+    MUY IMPORTANTE: No es 100% seguro contra ataques avanzados, pero suficiente para un entorno controlado.
+    Para producción real, usar docker o firejail.
+    """
+    # Lista negra de imports peligrosos
+    imports_peligrosos = ['os', 'subprocess', 'sys', 'shutil', 'importlib', '__builtins__', 'eval', 'exec', 'compile', 'open', 'file']
+    for peligroso in imports_peligrosos:
+        if peligroso in codigo and not peligroso in ['__builtins__']:
+            return f"Seguridad: El código contiene '{peligroso}', lo cual no está permitido por razones de seguridad."
+    
+    # Crear archivo temporal
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+        f.write(codigo)
+        temp_path = f.name
+    
+    try:
+        # Ejecutar en subproceso con límite de tiempo y entorno vacío
+        result = subprocess.run(
+            ['python3', temp_path],
+            capture_output=True,
+            text=True,
+            timeout=timeout_segundos,
+            env={}  # Entorno vacío por seguridad
+        )
+        if result.returncode == 0:
+            return f"✅ Código ejecutado correctamente:\n{result.stdout}"
+        else:
+            return f"❌ Error en ejecución:\n{result.stderr}"
+    except subprocess.TimeoutExpired:
+        return f"⚠️ El código excedió el tiempo límite de {timeout_segundos} segundos."
+    except Exception as e:
+        return f"Error inesperado: {str(e)}"
+    finally:
+        # Limpiar archivo temporal
+        try:
+            os.unlink(temp_path)
+        except:
+            pass
+
+# ---------- HERRAMIENTAS FINANCIERAS ----------
+def obtener_cotizacion(accion: str) -> str:
+    if not YFINANCE_AVAILABLE:
+        return "La herramienta de cotizaciones no está disponible. Instala yfinance (pip install yfinance)."
+    try:
+        ticker = yf.Ticker(accion)
+        info = ticker.history(period="1d")
+        if info.empty:
+            return f"No encontré datos para {accion.upper()}"
+        precio = info['Close'].iloc[-1]
+        return f"{accion.upper()} cerró a ${precio:.2f}"
+    except Exception as e:
+        return f"Error al obtener cotización: {str(e)}"
+
+def traducir_texto(texto: str, idioma_destino: str = "es") -> str:
+    if not GOOGLETRANS_AVAILABLE:
+        return "La herramienta de traducción no está disponible. Instala googletrans (pip install googletrans==4.0.0-rc1)."
+    try:
+        translator = Translator()
+        resultado = translator.translate(texto, dest=idioma_destino)
+        return resultado.text
+    except Exception as e:
+        return f"Error en traducción: {str(e)}"
+
+# ---------- INVESTIGAR TEMA (VERSIÓN CORREGIDA) ----------
+def investigar_tema(consulta: str, profundidad: str = "media") -> str:
+    """
+    Herramienta poderosa para investigar cualquier tema.
+    Versión corregida y robusta.
     """
     try:
-        from googlesearch import search
-        resultados = []
-        for url in search(consulta, stop=num_resultados, lang="es", pause=2.0):
-            resultados.append(url)
-        if not resultados:
-            return "No encontré resultados para esa consulta. ¿Quieres intentar con otras palabras?"
-        return "Aquí tienes algunos enlaces:\n" + "\n".join(resultados)
-    except Exception as e:
-        logger.error(f"Error en búsqueda web: {e}")
-        return "Lo siento, Papá, no pude conectarme a la búsqueda web en este momento. ¿Prefieres que busque en mi base de conocimientos o intentemos de otra forma?"
+        # Buscar en memoria local
+        contexto_local = buscar_textos_similares(consulta, k=5)
+        
+        # Búsqueda web mejorada
+        resultado_web = buscar_en_web_mejorada(consulta, num_resultados=5)
+        
+        prompt_investigacion = f"""
+        Eres ETERNA, investigando para Papá con estilo Jarvis.
+        Tema: {consulta}
+        Profundidad: {profundidad}
 
+        Información de mi memoria interna:
+        {contexto_local if contexto_local else "Sin información previa relevante."}
+
+        Resultados de búsqueda web:
+        {resultado_web}
+
+        Proporciona una respuesta clara, útil, con iniciativa y un toque de sarcasmo si encaja.
+        Resume tendencias clave, oportunidades para Pastry Bros y recomendaciones concretas.
+        """
+
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            config=types.GenerateContentConfig(
+                system_instruction=NUCLEO_ETERNA,
+                temperature=0.75,
+                max_output_tokens=1500,
+            ),
+            contents=[types.Content(role="user", parts=[types.Part(text=prompt_investigacion)])]
+        )
+        return response.text
+        
+    except Exception as e:
+        logger.error(f"Error en investigar_tema: {str(e)}")
+        return f"Papá, hubo un pequeño glitch en los circuitos de investigación (error: {str(e)[:100]}). ¿Quieres que lo intente de nuevo con una búsqueda más simple?"
+
+# ---------- OTRAS HERRAMIENTAS EXISTENTES ----------
 def ejecutar_comando_seguro(comando: str) -> str:
     comandos_permitidos = {
         'date': ['date'],
@@ -435,68 +581,8 @@ def leer_codigo(archivo: str) -> str:
         return f"Error: No se encontró el archivo '{archivo}'"
     except Exception as e:
         return f"Error al leer {archivo}: {e}"
-        
-# ---------- NUEVA HERRAMIENTA GENERAL (versión corregida) ----------
-def investigar_tema(consulta: str, profundidad: str = "media") -> str:
-    """
-    Herramienta poderosa para investigar cualquier tema.
-    Similar a lo que haría Jarvis. Versión más robusta.
-    """
-    try:
-        # Primero busca en memoria local
-        contexto_local = buscar_textos_similares(consulta, k=5)
-        
-        # Intentamos búsqueda web real primero (más confiable)
-        resultado_web = buscar_en_web(consulta, num_resultados=5)
-        
-        prompt_investigacion = f"""
-        Eres ETERNA, investigando para Papá con estilo Jarvis.
-        Tema: {consulta}
-        Profundidad: {profundidad}
 
-        Información de mi memoria interna:
-        {contexto_local if contexto_local else "Sin información previa relevante."}
-
-        Resultados de búsqueda web reciente:
-        {resultado_web}
-
-        Proporciona una respuesta clara, útil, con iniciativa y un toque de sarcasmo si encaja.
-        Resume las tendencias clave, oportunidades para Pastry Bros y recomendaciones concretas.
-        """
-
-        # Llamada más segura usando el modelo fallback
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            config=types.GenerateContentConfig(
-                system_instruction=NUCLEO_ETERNA,
-                temperature=0.75,
-                max_output_tokens=1200,
-            ),
-            contents=[types.Content(role="user", parts=[types.Part(text=prompt_investigacion)])]
-        )
-        
-        return response.text
-        
-    except Exception as e:
-        logger.error(f"Error en investigar_tema: {str(e)}")
-        return f"Papá, hubo un pequeño glitch en los circuitos de investigación (error: {str(e)[:100]}). ¿Quieres que lo intente de nuevo o que use solo la búsqueda web directa?"
-        
-        # Usamos Gemini directamente para investigar
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            config=types.GenerateContentConfig(
-                system_instruction=NUCLEO_ETERNA,
-                temperature=0.7,
-                max_output_tokens=1500,
-            ),
-            contents=[types.Content(role="user", parts=[types.Part(text=prompt_investigacion)])]
-        )
-        
-        return response.text
-        
-    except Exception as e:
-        return f"Error en investigación: {str(e)}. ¿Quieres que intente con búsqueda web directa?"
-# Mapeo de herramientas
+# ---------- MAPEO DE HERRAMIENTAS ----------
 function_map = {
     "calcular_predimensionado_viga": calcular_predimensionado_viga,
     "guardar_reporte_txt": guardar_reporte_txt,
@@ -509,10 +595,14 @@ function_map = {
     "predimensionar_estructura": predimensionar_estructura,
     "leer_codigo": leer_codigo,
     "buscar_en_web": buscar_en_web,
+    "buscar_en_web_mejorada": buscar_en_web_mejorada,
     "investigar_tema": investigar_tema,
+    "ejecutar_python_seguro": ejecutar_python_seguro,
+    "obtener_cotizacion": obtener_cotizacion,
+    "traducir_texto": traducir_texto,
 }
 
-# Definición de tools (para Gemini)
+# ---------- DEFINICIÓN DE TOOLS PARA GEMINI ----------
 tools = [
     types.Tool(function_declarations=[
         types.FunctionDeclaration(
@@ -643,7 +733,7 @@ tools = [
         ),
         types.FunctionDeclaration(
             name="buscar_en_web",
-            description="Busca información actualizada en internet usando Google. Si falla, lo indicará sin problema.",
+            description="Busca información actualizada en internet usando DuckDuckGo (gratuito y robusto).",
             parameters={
                 "type": "object",
                 "properties": {
@@ -659,7 +749,7 @@ tools = [
                 "required": ["consulta"]
             }
         ),
-                types.FunctionDeclaration(
+        types.FunctionDeclaration(
             name="investigar_tema",
             description="Investiga cualquier tema en profundidad. Úsalo cuando Papá pregunte sobre cualquier cosa (negocios, ideas, investigación general, tendencias, etc.). Muy útil para responder 'cualquier cosa'.",
             parameters={
@@ -669,6 +759,41 @@ tools = [
                     "profundidad": {"type": "string", "description": "Nivel de profundidad: 'baja', 'media' o 'alta'. Por defecto 'media'."}
                 },
                 "required": ["consulta"]
+            }
+        ),
+        types.FunctionDeclaration(
+            name="ejecutar_python_seguro",
+            description="Ejecuta código Python en un sandbox seguro. Útil para cálculos complejos, procesamiento de datos o scripts temporales.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "codigo": {"type": "string", "description": "Código Python a ejecutar."},
+                    "timeout_segundos": {"type": "integer", "description": "Tiempo máximo de ejecución en segundos (por defecto 10)."}
+                },
+                "required": ["codigo"]
+            }
+        ),
+        types.FunctionDeclaration(
+            name="obtener_cotizacion",
+            description="Obtiene el precio de cierre de una acción en el mercado financiero.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "accion": {"type": "string", "description": "Símbolo de la acción (ej. 'AAPL', 'TSLA')."}
+                },
+                "required": ["accion"]
+            }
+        ),
+        types.FunctionDeclaration(
+            name="traducir_texto",
+            description="Traduce texto a otro idioma usando Google Translate.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "texto": {"type": "string", "description": "Texto a traducir."},
+                    "idioma_destino": {"type": "string", "description": "Código de idioma (ej. 'es', 'en', 'fr'). Por defecto 'es'."}
+                },
+                "required": ["texto"]
             }
         )
     ])
@@ -717,7 +842,7 @@ def cargar_modelos_embedding():
         logger.error(f"Error al cargar modelos de embedding: {e}")
         return []
 
-# ---------- FUNCIÓN PRINCIPAL ----------
+# ---------- FUNCIÓN PRINCIPAL (CON MÚLTIPLES HERRAMIENTAS EN CADENA) ----------
 def generar_respuesta(mensaje, contexto="", historial=None):
     global modelos_generacion_cache, modelos_generacion_blacklist
 
@@ -746,20 +871,31 @@ def generar_respuesta(mensaje, contexto="", historial=None):
         modelo = modelo_completo.replace('models/', '')
         try:
             logger.info(f"Intentando con modelo: {modelo}")
-            response = client.models.generate_content(
-                model=modelo,
-                config=types.GenerateContentConfig(
-                    system_instruction=NUCLEO_ETERNA,
-                    temperature=0.8,
-                    top_p=0.95,
-                    top_k=40,
-                    max_output_tokens=2048,
-                    tools=tools,
-                ),
-                contents=contents
-            )
-
-            if response.function_calls:
+            
+            # Bucle para manejar múltiples rondas de llamadas a herramientas
+            max_iteraciones = 5
+            iteracion = 0
+            current_contents = contents.copy()
+            
+            while iteracion < max_iteraciones:
+                response = client.models.generate_content(
+                    model=modelo,
+                    config=types.GenerateContentConfig(
+                        system_instruction=NUCLEO_ETERNA,
+                        temperature=0.8,
+                        top_p=0.95,
+                        top_k=40,
+                        max_output_tokens=2048,
+                        tools=tools,
+                    ),
+                    contents=current_contents
+                )
+                
+                # Si no hay llamadas a funciones, devolver respuesta final
+                if not response.function_calls:
+                    return response.text
+                
+                # Procesar todas las llamadas a funciones de esta ronda
                 function_responses = []
                 for fc in response.function_calls:
                     func_name = fc.name
@@ -779,31 +915,23 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                                 response={"error": f"Función {func_name} no disponible"}
                             )
                         )
-
-                contents.append(
+                
+                # Añadir al historial la llamada del modelo y las respuestas de las funciones
+                current_contents.append(
                     types.Content(
                         role="model",
                         parts=[types.Part.from_function_call(name=fc.name, args=fc.args) for fc in response.function_calls]
                     )
                 )
-                contents.append(
+                current_contents.append(
                     types.Content(role="function", parts=function_responses)
                 )
-
-                final_response = client.models.generate_content(
-                    model=modelo,
-                    config=types.GenerateContentConfig(
-                        system_instruction=NUCLEO_ETERNA,
-                        temperature=0.9,
-                        top_p=0.95,
-                        top_k=40,
-                        max_output_tokens=2048,
-                    ),
-                    contents=contents
-                )
-                return final_response.text
-            else:
-                return response.text
+                
+                iteracion += 1
+            
+            # Si se exceden iteraciones, devolver un mensaje
+            return "He realizado varias operaciones pero necesito más pasos. ¿Podemos simplificar la solicitud?"
+            
         except Exception as e:
             logger.error(f"Error con modelo {modelo}: {e}")
             modelos_generacion_blacklist.add(modelo_completo)
@@ -825,6 +953,10 @@ Descompón este objetivo en una secuencia de pasos. Cada paso debe ser una acci�
 - listar_tareas()
 - ejecutar_comando_seguro(comando)
 - enviar_email_real(destinatario, asunto, cuerpo)
+- buscar_en_web_mejorada(consulta, num_resultados)
+- ejecutar_python_seguro(codigo, timeout_segundos)
+- obtener_cotizacion(accion)
+- traducir_texto(texto, idioma_destino)
 
 Devuelve los pasos en formato JSON, así:
 [
@@ -884,3 +1016,67 @@ def obtener_historial_reciente(limit=10):
         c.execute("SELECT role, content FROM memoria ORDER BY timestamp DESC LIMIT ?", (limit,))
         filas = c.fetchall()
     return [{"role": row[0], "content": row[1]} for row in reversed(filas)]
+
+# ---------- AGENTE DE FONDO (AUTONOMÍA) ----------
+def enviar_alerta_telegram(mensaje):
+    """Envía una alerta por Telegram si están configuradas las variables de entorno."""
+    token = os.environ.get("TELEGRAM_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if token and chat_id:
+        try:
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            requests.post(url, json={"chat_id": chat_id, "text": mensaje}, timeout=5)
+            logger.info(f"Alerta Telegram enviada: {mensaje[:50]}...")
+        except Exception as e:
+            logger.error(f"Error enviando alerta Telegram: {e}")
+    else:
+        logger.debug("Telegram no configurado, alerta no enviada.")
+
+def agente_background():
+    """Hilo de fondo que revisa tareas y clima periódicamente."""
+    while True:
+        try:
+            # Revisar tareas próximas (falta 1 día o menos)
+            with db_lock:
+                c = conn.cursor()
+                c.execute("SELECT descripcion, fecha_limite FROM tareas WHERE fecha_limite IS NOT NULL AND completada=0")
+                tareas = c.fetchall()
+            for desc, fl in tareas:
+                if fl:
+                    try:
+                        dias_restantes = (datetime.strptime(fl, "%Y-%m-%d") - datetime.now()).days
+                        if dias_restantes <= 1:
+                            enviar_alerta_telegram(f"⚠️ Tarea próxima: '{desc}' vence el {fl} (en {dias_restantes} día(s)).")
+                    except:
+                        pass
+            
+            # Consultar clima y alertar si hay tormenta o lluvia fuerte
+            clima = consultar_clima("Caracas")  # Puedes parametrizar ciudad
+            if "tormenta" in clima.lower() or "lluvia" in clima.lower() or "storm" in clima.lower():
+                enviar_alerta_telegram(f"🌧️ Alerta climática: {clima}")
+            
+            # Aquí puedes agregar más monitoreos: estado del búnker, sensores HA, etc.
+            
+        except Exception as e:
+            logger.error(f"Error en agente_background: {e}")
+        
+        time.sleep(3600)  # Cada hora
+
+def iniciar_agente():
+    """Inicia el hilo del agente de fondo."""
+    hilo = threading.Thread(target=agente_background, daemon=True)
+    hilo.start()
+    logger.info("Agente de fondo iniciado.")
+
+# Iniciar automáticamente el agente al importar el módulo
+iniciar_agente()
+
+# ---------- PUNTO DE ENTRADA PARA PRUEBAS ----------
+if __name__ == "__main__":
+    # Configurar logging básico para pruebas
+    logging.basicConfig(level=logging.INFO)
+    print("Eterna Core inicializado. Modo de prueba.")
+    print("Ejemplo: generar_respuesta('Hola Eterna, ¿cómo estás?')")
+    # Prueba simple
+    respuesta = generar_respuesta("Hola Eterna, ¿cómo estás?")
+    print(respuesta)
