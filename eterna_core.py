@@ -436,27 +436,50 @@ def leer_codigo(archivo: str) -> str:
     except Exception as e:
         return f"Error al leer {archivo}: {e}"
         
-# ---------- NUEVA HERRAMIENTA GENERAL ----------
+# ---------- NUEVA HERRAMIENTA GENERAL (versión corregida) ----------
 def investigar_tema(consulta: str, profundidad: str = "media") -> str:
     """
     Herramienta poderosa para investigar cualquier tema.
-    Similar a lo que haría Jarvis.
+    Similar a lo que haría Jarvis. Versión más robusta.
     """
     try:
-        # Primero busca en memoria local (FAISS)
+        # Primero busca en memoria local
         contexto_local = buscar_textos_similares(consulta, k=5)
         
+        # Intentamos búsqueda web real primero (más confiable)
+        resultado_web = buscar_en_web(consulta, num_resultados=5)
+        
         prompt_investigacion = f"""
-        Eres ETERNA investigando para Papá.
+        Eres ETERNA, investigando para Papá con estilo Jarvis.
         Tema: {consulta}
-        Profundidad solicitada: {profundidad}
-        
-        Usa la información de mi memoria local si es relevante:
-        {contexto_local if contexto_local else "No hay información previa relevante."}
-        
-        Proporciona una respuesta clara, útil y con iniciativa.
-        Si hace falta información actualizada, indícalo y usa buscar_en_web.
+        Profundidad: {profundidad}
+
+        Información de mi memoria interna:
+        {contexto_local if contexto_local else "Sin información previa relevante."}
+
+        Resultados de búsqueda web reciente:
+        {resultado_web}
+
+        Proporciona una respuesta clara, útil, con iniciativa y un toque de sarcasmo si encaja.
+        Resume las tendencias clave, oportunidades para Pastry Bros y recomendaciones concretas.
         """
+
+        # Llamada más segura usando el modelo fallback
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            config=types.GenerateContentConfig(
+                system_instruction=NUCLEO_ETERNA,
+                temperature=0.75,
+                max_output_tokens=1200,
+            ),
+            contents=[types.Content(role="user", parts=[types.Part(text=prompt_investigacion)])]
+        )
+        
+        return response.text
+        
+    except Exception as e:
+        logger.error(f"Error en investigar_tema: {str(e)}")
+        return f"Papá, hubo un pequeño glitch en los circuitos de investigación (error: {str(e)[:100]}). ¿Quieres que lo intente de nuevo o que use solo la búsqueda web directa?"
         
         # Usamos Gemini directamente para investigar
         response = client.models.generate_content(
