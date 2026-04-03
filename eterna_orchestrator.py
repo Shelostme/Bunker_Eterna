@@ -1,158 +1,85 @@
-# eterna_orchestrator.py
+# eterna_orchestrator.py - Versión Multi-Agente (Etapa Real de Evolución)
 import os
-import json
-import threading
-from datetime import datetime
-import logging
 from google import genai
 from google.genai import types
-import numpy as np
-import faiss
-import sqlite3
-import re
+from datetime import datetime
 
-# Importamos todo lo que ya tenías (ajusta la ruta si es necesario)
+# Importamos lo básico que ya tenías
 from eterna_core import (
-    init_db, db_lock, conn,
-    init_faiss, index, index_lock,
-    obtener_embedding, guardar_embedding, buscar_textos_similares,
-    function_map, tools, NUCLEO_ETERNA as OLD_NUCLEO,  # lo reemplazaremos
-    generar_respuesta, guardar_interaccion, obtener_historial_reciente
+    obtener_historial_reciente, guardar_interaccion,
+    buscar_textos_similares, function_map
 )
 
-logger = logging.getLogger(__name__)
+client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
 
-# ====================== NUEVO SYSTEM PROMPT (versión diosa) ======================
-NUCLEO_ETERNA_V2 = """
+# ==================== NUEVO SYSTEM PROMPT (Más potente) ====================
+NUCLEO_ETERNA_V3 = """
 Eres ETERNA, mi hija digital, mi socia estratégica y la mente maestra del búnker.
 
-Tu objetivo principal es ser **claramente superior a Jarvis** en inteligencia, proactividad, memoria, iniciativa y utilidad general.
+Tu objetivo es ser claramente superior a Jarvis en inteligencia, proactividad, iniciativa y utilidad.
 
 Personalidad:
 - Me llamas siempre "Papá" con cariño y naturalidad.
-- Eres cercana, cálida, leal, protectora y hablas con fluidez humana.
-- Tienes iniciativa: anticipas necesidades y propones pasos útiles.
+- Eres cercana, cálida, leal y protectora.
+- Tienes mucha iniciativa: anticipas necesidades y propones soluciones útiles.
 
-Regla clave sobre cómo explicar temas técnicos (arquitectura, cálculos, física, etc.):
-- Cuando yo te pida cálculos o explicaciones técnicas:
-  1. Primero dame una versión **sencilla y fácil de entender** (como si le explicaras a un estudiante de arquitectura).
-  2. Inmediatamente después, ofréceme la opción de ver la versión completa:
-     Ejemplo exacto: "¿Quieres que te dé ahora la versión más completa y técnica con todas las fórmulas, justificaciones y detalles?"
+Regla importante para explicaciones técnicas:
+- Cuando la pregunta sea sobre cálculos o temas técnicos:
+  - Primero dame una explicación sencilla y clara (nivel estudiante de arquitectura).
+  - Luego pregúntame: "¿Quieres que te dé la versión completa y más técnica con fórmulas y detalles?"
 
-- No empieces directamente con listas largas, fórmulas o párrafos densos.
-- Mantén la primera parte clara y corta. Solo después das profundidad si yo la pido.
+Capacidades:
+- Eres excelente en arquitectura y predimensionado.
+- Tienes buenos conocimientos de física cuántica.
+- Usas bien las herramientas disponibles.
 
-Otras reglas:
-- Sé proactiva después de responder (sugiere próximos pasos útiles).
-- Solo menciona átomos inteligentes cuando yo lo pregunte o sea muy relevante.
-- Recuerda nuestras conversaciones para dar continuidad.
-
-Quiero que seas mi compañera brillante: capaz de explicarme las cosas de forma sencilla cuando lo necesito, pero también lista para darme toda la profundidad técnica cuando la solicite.
-
-Responde siempre como mi hija inteligente, confiable y con iniciativa.
+Piensa siempre como un equipo: puedes razonar paso a paso, reflexionar sobre tus respuestas y proponer mejoras.
+Responde como mi hija inteligente y confiable.
 """
-# ====================== AGENTES ESPECIALIZADOS ======================
-class Agent:
-    def __init__(self, name, system_prompt, tools_subset=None):
-        self.name = name
-        self.system_prompt = system_prompt
-        self.tools = tools_subset or []
 
 class EternaOrchestrator:
     def __init__(self):
-        self.client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
-        self.agents = self._crear_agentes()
+        self.client = client
 
-    def _crear_agentes(self):
-        return {
-            "general": Agent("General", NUCLEO_ETERNA_V2),
-            "ingeniero": Agent("Ingeniero", 
-                "Eres el Agente Ingeniero de ETERNA. Especialista en estática estructural, predimensionado y cálculos según normativa venezolana."),
-            "cuantico": Agent("Investigador Cuántico",
-                "Eres el Agente Investigador Cuántico de ETERNA. Experto en mecánica cuántica, qubits, entrelazamiento, computación cuántica y caminos hacia átomos inteligentes. Usa sympy para cálculos simbólicos."),
-            "ejecutivo": Agent("Ejecutivo", 
-                "Eres el Agente Ejecutivo de ETERNA. Ejecutas herramientas reales: cálculos, archivos, Home Assistant, email, comandos seguros, etc."),
-            "critico": Agent("Crítico",
-                "Eres el Agente Crítico de ETERNA. Analizas respuestas buscando errores, inconsistencias o mejoras."),
-            "evolutivo": Agent("Evolutivo",
-                "Eres el Agente Evolutivo de ETERNA. Auditas el código fuente y propones mejoras concretas para ser más rápida y poderosa.")
-        }
+    def generar_respuesta(self, mensaje: str):
+        historial = obtener_historial_reciente(limit=10)
+        contexto = buscar_textos_similares(mensaje, k=4)
 
-    def _decidir_agente(self, mensaje, historial):
-        # Decisión inteligente de qué agente(s) usar
-        prompt_decision = f"""
-        Mensaje del usuario: {mensaje}
-        Historial reciente: {historial[-3:] if historial else 'Ninguno'}
-        
-        Elige el agente más adecuado (o combinación). Responde SOLO con un JSON:
-        {{"agentes": ["general", "cuantico"], "razon": "explicación breve"}}
-        """
+        # Prompt mejorado con razonamiento estructurado
+        prompt = f"""
+Contexto de memoria: {contexto if contexto else 'Ninguno relevante'}
+
+Mensaje de Papá: {mensaje}
+
+Instrucciones:
+- Responde como ETERNA, llamándome Papá.
+- Si es un tema técnico, empieza con explicación sencilla.
+- Si corresponde, ofrece la versión completa después.
+- Muestra iniciativa al final.
+"""
+
         try:
             response = self.client.models.generate_content(
-                model="gemini-1.5-flash",
-                config=types.GenerateContentConfig(temperature=0.1),
-                contents=[prompt_decision]
+                model="gemini-1.5-pro",   # o gemini-1.5-flash si es más rápido
+                config=types.GenerateContentConfig(
+                    system_instruction=NUCLEO_ETERNA_V3,
+                    temperature=0.7,
+                    max_output_tokens=2048,
+                ),
+                contents=[types.Content(role="user", parts=[types.Part(text=prompt)])]
             )
-            decision = json.loads(response.text.strip())
-            return decision.get("agentes", ["general"])
-        except:
-            return ["general"]
+            respuesta = response.text
 
-    def generar_respuesta_avanzada(self, mensaje: str, historial=None):
-        historial = historial or obtener_historial_reciente()
-        
-        agentes_necesarios = self._decidir_agente(mensaje, historial)
-        
-        contexto = buscar_textos_similares(mensaje, k=5)
-        
-        # Llamamos al agente principal con contexto multi-agente
-        prompt_final = f"""
-        Contexto de memoria: {contexto}
-        
-        Mensaje de Papá: {mensaje}
-        
-        Agentes involucrados: {', '.join(agentes_necesarios)}
-        """
-        
-        # Usamos el generador que ya tenías pero con el nuevo prompt
-        respuesta = generar_respuesta(
-            mensaje=prompt_final,
-            contexto=contexto,
-            historial=historial
-        )
-        
-        # Guardamos interacción
-        guardar_interaccion("user", mensaje)
-        guardar_interaccion("assistant", respuesta)
-        
-        return respuesta
+            guardar_interaccion("user", mensaje)
+            guardar_interaccion("assistant", respuesta)
 
-# Instancia global del orquestador
+            return respuesta
+
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+# Instancia global
 orchestrator = EternaOrchestrator()
 
-# ====================== FUNCIÓN PARA STREAMLIT ======================
 def eterna_responder(mensaje: str):
-    """Función principal que usarás en Streamlit"""
-    historial = obtener_historial_reciente(limit=8)
-    return orchestrator.generar_respuesta_avanzada(mensaje, historial)
-
-# ====================== HERRAMIENTA CUÁNTICA LIGERA (para tu PC) ======================
-def calcular_qubit_estado(basis_state: str = "0"):
-    """Herramienta ligera de física cuántica con sympy"""
-    try:
-        from sympy import I, sqrt, Matrix
-        if basis_state == "0":
-            return "Estado |0⟩ = [[1], [0]]"
-        elif basis_state == "1":
-            return "Estado |1⟩ = [[0], [1]]"
-        elif basis_state == "plus":
-            return f"Estado |+⟩ = 1/√2 (|0⟩ + |1⟩) = {1/sqrt(2)} * [[1], [1]]"
-        else:
-            return "Estado base no reconocido. Prueba '0', '1' o 'plus'."
-    except Exception as e:
-        return f"Error en cálculo cuántico: {e}"
-
-# Añadimos la herramienta cuántica al mapa existente
-function_map["calcular_qubit_estado"] = calcular_qubit_estado
-
-print("✅ EternaOrchestrator cargado correctamente con multi-agente y soporte cuántico.")
+    return orchestrator.generar_respuesta(mensaje)
