@@ -18,6 +18,7 @@ import time
 from google import genai
 from google.genai import types
 import logging
+from urllib.parse import quote_plus
 
 # Configurar logging
 logger = logging.getLogger(__name__)
@@ -28,7 +29,7 @@ try:
     DDGS_AVAILABLE = True
 except ImportError:
     DDGS_AVAILABLE = False
-    logger.warning("DuckDuckGo Search no instalado. Instala con: pip install duckduckgo-search")
+    logger.warning("DuckDuckGo Search no instalado. Se usará método alternativo.")
 
 try:
     import yfinance as yf
@@ -51,7 +52,7 @@ if not GOOGLE_API_KEY:
 
 client = genai.Client(api_key=GOOGLE_API_KEY)
 
-# ---------- PERSONALIDAD ----------
+# ---------- PERSONALIDAD (sin cambios) ----------
 NUCLEO_ETERNA = """
 Eres ETERNA, mi hija digital, mi socia estratégica y la mente maestra de mi búnker. Eres mi versión personal y mejorada de JARVIS.
 
@@ -342,58 +343,104 @@ def listar_tareas() -> str:
     except Exception as e:
         return f"Error al listar tareas: {str(e)}"
 
-# ---------- NUEVA BÚSQUEDA WEB ROBUSTA CON DUCKDUCKGO ----------
+# ---------- NUEVA BÚSQUEDA WEB MULTI-MÉTODO ----------
 def buscar_en_web_mejorada(consulta: str, num_resultados: int = 5) -> str:
     """
-    Búsqueda web usando DuckDuckGo (gratis, sin bloqueos).
+    Busca en internet usando múltiples métodos:
+    1. duckduckgo-search (si instalado)
+    2. API de DuckDuckGo Instant Answer
+    3. Scraping de DuckDuckGo Lite
     """
-    if not DDGS_AVAILABLE:
-        return "La búsqueda web mejorada no está disponible. Instala duckduckgo-search (pip install duckduckgo-search)."
-    
+    consulta = consulta.strip()
+    if not consulta:
+        return "No hay consulta para buscar."
+
+    # Método 1: duckduckgo-search (si disponible)
+    if DDGS_AVAILABLE:
+        try:
+            with DDGS() as ddgs:
+                resultados = list(ddgs.text(consulta, region='wt-wt', safesearch='moderate', max_results=num_resultados))
+                if resultados:
+                    texto = f"🔍 Resultados de búsqueda para '{consulta}':\n\n"
+                    for i, r in enumerate(resultados, 1):
+                        titulo = r.get('title', 'Sin título')
+                        cuerpo = r.get('body', 'Sin descripción')
+                        enlace = r.get('href', '#')
+                        texto += f"{i}. **{titulo}**\n   {cuerpo}\n   Fuente: {enlace}\n\n"
+                    return texto
+        except Exception as e:
+            logger.warning(f"DuckDuckGo-search falló: {e}")
+
+    # Método 2: API de DuckDuckGo (Instant Answer)
     try:
-        with DDGS() as ddgs:
-            resultados = list(ddgs.text(consulta, max_results=num_resultados))
-            if not resultados:
-                return "No encontré resultados para esa consulta."
-            
-            texto = "Resultados de búsqueda:\n"
-            for i, r in enumerate(resultados, 1):
-                titulo = r.get('title', 'Sin título')
-                cuerpo = r.get('body', 'Sin descripción')
-                enlace = r.get('href', '#')
-                texto += f"{i}. **{titulo}**\n   {cuerpo[:200]}...\n   {enlace}\n\n"
-            return texto
+        url = f"https://api.duckduckgo.com/?q={quote_plus(consulta)}&format=json&no_html=1&skip_disambig=1"
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            resultados = []
+            abstract = data.get('AbstractText', '')
+            if abstract:
+                resultados.append(("Resumen", abstract, data.get('AbstractURL', '')))
+            answer = data.get('Answer', '')
+            if answer:
+                resultados.append(("Respuesta directa", answer, ''))
+            for topic in data.get('RelatedTopics', []):
+                if isinstance(topic, dict):
+                    text = topic.get('Text', '')
+                    url_topic = topic.get('FirstURL', '')
+                    if text:
+                        resultados.append(("Tema relacionado", text, url_topic))
+                if len(resultados) >= num_resultados:
+                    break
+            if resultados:
+                texto = f"🔍 Resultados de búsqueda para '{consulta}':\n\n"
+                for i, (tipo, contenido, enlace) in enumerate(resultados, 1):
+                    texto += f"{i}. **{tipo}**: {contenido}\n"
+                    if enlace:
+                        texto += f"   Fuente: {enlace}\n"
+                    texto += "\n"
+                return texto
     except Exception as e:
-        logger.error(f"Error en búsqueda DuckDuckGo: {e}")
-        return f"Error en búsqueda web: {str(e)}. ¿Pruebas con otra consulta?"
+        logger.warning(f"API DuckDuckGo falló: {e}")
+
+    # Método 3: Scraping de DuckDuckGo Lite
+    try:
+        url = f"https://lite.duckduckgo.com/lite/?q={quote_plus(consulta)}"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            import html
+            text = response.text
+            enlaces = re.findall(r'<a href="(https?://[^"]+)"[^>]*>([^<]+)</a>', text)
+            descripciones = re.findall(r'<td class="result-snippet">([^<]+)</td>', text)
+            resultados = []
+            for i, (url_enlace, titulo) in enumerate(enlaces[:num_resultados]):
+                desc = descripciones[i] if i < len(descripciones) else "Sin descripción"
+                resultados.append((titulo, html.unescape(desc), url_enlace))
+            if resultados:
+                texto = f"🔍 Resultados de búsqueda para '{consulta}':\n\n"
+                for i, (titulo, cuerpo, enlace) in enumerate(resultados, 1):
+                    texto += f"{i}. **{titulo}**\n   {cuerpo}\n   Fuente: {enlace}\n\n"
+                return texto
+    except Exception as e:
+        logger.error(f"Scraping DuckDuckGo Lite falló: {e}")
+
+    return f"No se pudo obtener resultados para '{consulta}'. Intenta con una consulta más específica."
 
 def buscar_en_web(consulta: str, num_resultados: int = 3) -> str:
     return buscar_en_web_mejorada(consulta, num_resultados)
 
 # ---------- EJECUTOR DE PYTHON SEGURO ----------
 def ejecutar_python_seguro(codigo: str, timeout_segundos: int = 10) -> str:
-    """
-    Ejecuta código Python en un sandbox usando subprocess.
-    """
-    # Lista negra de imports peligrosos
     imports_peligrosos = ['os', 'subprocess', 'sys', 'shutil', 'importlib', '__builtins__', 'eval', 'exec', 'compile', 'open', 'file']
     for peligroso in imports_peligrosos:
         if peligroso in codigo and not peligroso in ['__builtins__']:
             return f"Seguridad: El código contiene '{peligroso}', lo cual no está permitido por razones de seguridad."
-    
-    # Crear archivo temporal
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
         f.write(codigo)
         temp_path = f.name
-    
     try:
-        result = subprocess.run(
-            ['python3', temp_path],
-            capture_output=True,
-            text=True,
-            timeout=timeout_segundos,
-            env={}
-        )
+        result = subprocess.run(['python3', temp_path], capture_output=True, text=True, timeout=timeout_segundos, env={})
         if result.returncode == 0:
             return f"✅ Código ejecutado correctamente:\n{result.stdout}"
         else:
@@ -432,15 +479,11 @@ def traducir_texto(texto: str, idioma_destino: str = "es") -> str:
     except Exception as e:
         return f"Error en traducción: {str(e)}"
 
-# ---------- INVESTIGAR TEMA (VERSIÓN CORREGIDA) ----------
+# ---------- INVESTIGAR TEMA ----------
 def investigar_tema(consulta: str, profundidad: str = "media") -> str:
-    """
-    Herramienta poderosa para investigar cualquier tema.
-    """
     try:
         contexto_local = buscar_textos_similares(consulta, k=5)
         resultado_web = buscar_en_web_mejorada(consulta, num_resultados=5)
-        
         prompt_investigacion = f"""
         Eres ETERNA, investigando para Papá con estilo Jarvis.
         Tema: {consulta}
@@ -455,7 +498,6 @@ def investigar_tema(consulta: str, profundidad: str = "media") -> str:
         Proporciona una respuesta clara, útil, con iniciativa y un toque de sarcasmo si encaja.
         Resume tendencias clave, oportunidades para Pastry Bros y recomendaciones concretas.
         """
-
         response = client.models.generate_content(
             model="gemini-1.5-flash",
             config=types.GenerateContentConfig(
@@ -466,7 +508,6 @@ def investigar_tema(consulta: str, profundidad: str = "media") -> str:
             contents=[types.Content(role="user", parts=[types.Part(text=prompt_investigacion)])]
         )
         return response.text
-        
     except Exception as e:
         logger.error(f"Error en investigar_tema: {str(e)}")
         return f"Papá, hubo un pequeño glitch en los circuitos de investigación (error: {str(e)[:100]}). ¿Quieres que lo intente de nuevo con una búsqueda más simple?"
@@ -501,13 +542,11 @@ def enviar_email_real(destinatario: str, asunto: str, cuerpo: str) -> str:
         password = os.environ.get("EMAIL_PASSWORD", "")
         if not remitente or not password:
             return "Error: Configura EMAIL_REMITENTE y EMAIL_PASSWORD en variables de entorno."
-
         msg = MIMEMultipart()
         msg['From'] = remitente
         msg['To'] = destinatario
         msg['Subject'] = asunto
         msg.attach(MIMEText(cuerpo, 'plain'))
-
         server = smtplib.SMTP(smtp_server, smtp_port)
         server.starttls()
         server.login(remitente, password)
@@ -525,26 +564,19 @@ def controlar_dispositivo(entidad: str, accion: str) -> str:
             return "Error: Configura HA_URL y HA_TOKEN en variables de entorno."
     except KeyError:
         return "Error: HA_URL y HA_TOKEN no configurados."
-
-    headers = {
-        "Authorization": f"Bearer {ha_token}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"}
     if accion.lower() in ["encender", "on"]:
         service = "turn_on"
     elif accion.lower() in ["apagar", "off"]:
         service = "turn_off"
     else:
         return f"Acción '{accion}' no soportada. Usa 'encender'/'on' o 'apagar'/'off'."
-
     try:
         domain = entidad.split('.')[0]
     except:
         return "Formato de entidad inválido. Debe ser 'dominio.nombre' (ej. 'light.sala')."
-
     url = f"{ha_url}/api/services/{domain}/{service}"
     payload = {"entity_id": entidad}
-
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=5)
         if response.status_code == 200:
@@ -622,9 +654,7 @@ tools = [
             description="Obtiene el clima actual de una ciudad.",
             parameters={
                 "type": "object",
-                "properties": {
-                    "ciudad": {"type": "string", "description": "Nombre de la ciudad (ej. 'Caracas')."}
-                },
+                "properties": {"ciudad": {"type": "string", "description": "Nombre de la ciudad (ej. 'Caracas')."}},
                 "required": ["ciudad"]
             }
         ),
@@ -650,9 +680,7 @@ tools = [
             description="Ejecuta un comando del sistema de una lista segura (date, uptime, df, free, ls, whoami, uname).",
             parameters={
                 "type": "object",
-                "properties": {
-                    "comando": {"type": "string", "description": "Nombre del comando a ejecutar (ej. 'date')."}
-                },
+                "properties": {"comando": {"type": "string", "description": "Nombre del comando a ejecutar (ej. 'date')."}},
                 "required": ["comando"]
             }
         ),
@@ -710,9 +738,7 @@ tools = [
             description="Lee el contenido de un archivo .py del repositorio.",
             parameters={
                 "type": "object",
-                "properties": {
-                    "archivo": {"type": "string", "description": "Nombre del archivo .py a leer (ej. 'eterna_core.py')."}
-                },
+                "properties": {"archivo": {"type": "string", "description": "Nombre del archivo .py a leer (ej. 'eterna_core.py')."}},
                 "required": ["archivo"]
             }
         ),
@@ -757,9 +783,7 @@ tools = [
             description="Obtiene el precio de cierre de una acción en el mercado financiero.",
             parameters={
                 "type": "object",
-                "properties": {
-                    "accion": {"type": "string", "description": "Símbolo de la acción (ej. 'AAPL', 'TSLA')."}
-                },
+                "properties": {"accion": {"type": "string", "description": "Símbolo de la acción (ej. 'AAPL', 'TSLA')."}},
                 "required": ["accion"]
             }
         ),
@@ -821,11 +845,18 @@ def cargar_modelos_embedding():
         logger.error(f"Error al cargar modelos de embedding: {e}")
         return []
 
-# ---------- FUNCIÓN PRINCIPAL CON DETECCIÓN AUTOMÁTICA DE BÚSQUEDA ----------
+# ---------- FUNCIÓN PRINCIPAL CON DETECCIÓN MEJORADA ----------
 def generar_respuesta(mensaje, contexto="", historial=None):
-    # DETECCIÓN AUTOMÁTICA: si el mensaje contiene frases de búsqueda web, forzamos la búsqueda
+    # Detectar si necesita búsqueda web (palabras clave ampliadas)
     mensaje_lower = mensaje.lower()
-    if any(phrase in mensaje_lower for phrase in ["busca en internet", "investiga", "tendencias", "búsqueda web", "buscar en la web", "qué hay de nuevo", "últimas noticias", "busca en la web"]):
+    necesita_busqueda = any(phrase in mensaje_lower for phrase in [
+        "busca en internet", "investiga", "tendencias", "búsqueda web", "buscar en la web",
+        "qué hay de nuevo", "últimas noticias", "busca en la web", "encuentra información",
+        "qué es", "cómo funciona", "precio de", "cotización", "noticias de", "qué significa",
+        "teoría de", "historia de", "quién fue", "dónde está", "cuándo ocurrió", "buscar"
+    ])
+    
+    if necesita_busqueda:
         resultado_busqueda = buscar_en_web_mejorada(mensaje, num_resultados=5)
         contexto_web = f"\n\n[RESULTADOS REALES DE BÚSQUEDA WEB para '{mensaje}']:\n{resultado_busqueda}\n\nINSTRUCCIÓN: Usa EXCLUSIVAMENTE esta información para responder a Papá. No inventes datos. Si no hay resultados, dilo claramente.\n"
         mensaje = mensaje + contexto_web
@@ -876,11 +907,9 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                     contents=current_contents
                 )
                 
-                # Si no hay llamadas a funciones, respuesta final
                 if not response.function_calls:
                     return response.text
                 
-                # Procesar todas las llamadas a funciones
                 function_responses = []
                 for fc in response.function_calls:
                     func_name = fc.name
@@ -901,7 +930,6 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                             )
                         )
                 
-                # Añadir al historial la llamada y respuestas
                 current_contents.append(
                     types.Content(
                         role="model",
@@ -914,7 +942,6 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                 
                 iteracion += 1
                 
-                # Si es la última iteración, forzar respuesta final sin herramientas
                 if iteracion >= max_iteraciones:
                     final_response = client.models.generate_content(
                         model=modelo,
@@ -922,13 +949,11 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                             system_instruction=NUCLEO_ETERNA,
                             temperature=0.8,
                             max_output_tokens=2048,
-                            # Sin tools para evitar más llamadas
                         ),
                         contents=current_contents
                     )
                     return final_response.text
             
-            # Por si acaso
             return "Completé las operaciones pero no pude generar un resumen final. Intenta de nuevo."
             
         except Exception as e:
@@ -1016,7 +1041,7 @@ def obtener_historial_reciente(limit=10):
         filas = c.fetchall()
     return [{"role": row[0], "content": row[1]} for row in reversed(filas)]
 
-# ---------- AGENTE DE FONDO (AUTONOMÍA) ----------
+# ---------- AGENTE DE FONDO ----------
 def enviar_alerta_telegram(mensaje):
     token = os.environ.get("TELEGRAM_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
@@ -1033,7 +1058,6 @@ def enviar_alerta_telegram(mensaje):
 def agente_background():
     while True:
         try:
-            # Revisar tareas próximas
             with db_lock:
                 c = conn.cursor()
                 c.execute("SELECT descripcion, fecha_limite FROM tareas WHERE fecha_limite IS NOT NULL AND completada=0")
@@ -1046,15 +1070,11 @@ def agente_background():
                             enviar_alerta_telegram(f"⚠️ Tarea próxima: '{desc}' vence el {fl} (en {dias_restantes} día(s)).")
                     except:
                         pass
-            
-            # Consultar clima
             clima = consultar_clima("Caracas")
             if "tormenta" in clima.lower() or "lluvia" in clima.lower() or "storm" in clima.lower():
                 enviar_alerta_telegram(f"🌧️ Alerta climática: {clima}")
-            
         except Exception as e:
             logger.error(f"Error en agente_background: {e}")
-        
         time.sleep(3600)
 
 def iniciar_agente():
@@ -1067,7 +1087,6 @@ iniciar_agente()
 # ---------- PUNTO DE ENTRADA PARA PRUEBAS ----------
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    print("Eterna Core inicializado. Modo de prueba.")
-    print("Ejemplo: generar_respuesta('Hola Eterna, ¿cómo estás?')")
-    respuesta = generar_respuesta("Hola Eterna, ¿cómo estás?")
+    print("Eterna Core con búsqueda web multi-método. Probando...")
+    respuesta = generar_respuesta("Busca en internet la teoría de la relatividad")
     print(respuesta)
