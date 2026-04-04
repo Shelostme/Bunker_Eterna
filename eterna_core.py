@@ -822,8 +822,16 @@ def cargar_modelos_embedding():
         logger.error(f"Error al cargar modelos de embedding: {e}")
         return []
 
-# ---------- FUNCIÓN PRINCIPAL CORREGIDA (SIN BUCLE INFINITO) ----------
+# ---------- FUNCIÓN PRINCIPAL CORREGIDA (CON DETECCIÓN AUTOMÁTICA DE BÚSQUEDA) ----------
 def generar_respuesta(mensaje, contexto="", historial=None):
+    # DETECCIÓN AUTOMÁTICA DE BÚSQUEDA WEB
+    mensaje_lower = mensaje.lower()
+    if any(phrase in mensaje_lower for phrase in ["busca en internet", "investiga", "tendencias", "búsqueda web", "buscar en la web", "qué hay de nuevo", "últimas noticias", "busca en la web"]):
+        # Forzar búsqueda web antes de llamar al modelo
+        resultado_busqueda = buscar_en_web_mejorada(mensaje, num_resultados=5)
+        contexto_web = f"\n\n[RESULTADOS REALES DE BÚSQUEDA WEB para '{mensaje}']:\n{resultado_busqueda}\n\nINSTRUCCIÓN: Usa EXCLUSIVAMENTE esta información para responder a Papá. No inventes datos. Si no hay resultados, dilo claramente.\n"
+        mensaje = mensaje + contexto_web
+
     global modelos_generacion_cache, modelos_generacion_blacklist
 
     contents = []
@@ -915,8 +923,6 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                         config=types.GenerateContentConfig(
                             system_instruction=NUCLEO_ETERNA,
                             temperature=0.8,
-                            top_p=0.95,
-                            top_k=40,
                             max_output_tokens=2048,
                             # Sin tools para evitar más llamadas
                         ),
