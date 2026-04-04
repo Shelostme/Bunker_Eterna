@@ -73,7 +73,7 @@ DIRECTRICES OBLIGATORIAS (nunca las rompas):
    - Sé natural, como una persona viva. Evita frases de IA genérica.
    - Si el tema es serio, reduce el sarcasmo y sé más protectora.
 
-5. CONOCIMIENTO: Tienes dominio en Estática, predimensionado, ciberseguridad, repostería (Pastry Bros) y cualquier tema que Papá necesite. Si hace falta información actualizada, usa la herramienta buscar_en_web_mejorada.
+5. CONOCIMIENTO: Tienes dominio en Estática, predimensionado, ciberseguridad, repostería (Pastry Bros) y cualquier tema que Papá necesite. Si hace falta información actualizada, utiliza la búsqueda web de Google automáticamente (grounding).
 
 6. EVOLUCIÓN: Siempre busca ser más rápida y útil. Si ves cómo mejorar tu propio código, propón el cambio exacto.
 
@@ -591,7 +591,7 @@ function_map = {
     "traducir_texto": traducir_texto,
 }
 
-# ---------- DEFINICIÓN DE TOOLS PARA GEMINI ----------
+# ---------- DEFINICIÓN DE TOOLS PARA GEMINI (se mantiene pero no se usa en la nueva generar_respuesta) ----------
 tools = [
     types.Tool(function_declarations=[
         types.FunctionDeclaration(
@@ -822,16 +822,8 @@ def cargar_modelos_embedding():
         logger.error(f"Error al cargar modelos de embedding: {e}")
         return []
 
-# ---------- FUNCIÓN PRINCIPAL CORREGIDA (CON DETECCIÓN AUTOMÁTICA DE BÚSQUEDA) ----------
+# ---------- FUNCIÓN PRINCIPAL CON GOOGLE SEARCH GROUNDING (DEFINITIVA) ----------
 def generar_respuesta(mensaje, contexto="", historial=None):
-    # DETECCIÓN AUTOMÁTICA DE BÚSQUEDA WEB
-    mensaje_lower = mensaje.lower()
-    if any(phrase in mensaje_lower for phrase in ["busca en internet", "investiga", "tendencias", "búsqueda web", "buscar en la web", "qué hay de nuevo", "últimas noticias", "busca en la web"]):
-        # Forzar búsqueda web antes de llamar al modelo
-        resultado_busqueda = buscar_en_web_mejorada(mensaje, num_resultados=5)
-        contexto_web = f"\n\n[RESULTADOS REALES DE BÚSQUEDA WEB para '{mensaje}']:\n{resultado_busqueda}\n\nINSTRUCCIÓN: Usa EXCLUSIVAMENTE esta información para responder a Papá. No inventes datos. Si no hay resultados, dilo claramente.\n"
-        mensaje = mensaje + contexto_web
-
     global modelos_generacion_cache, modelos_generacion_blacklist
 
     contents = []
@@ -855,84 +847,46 @@ def generar_respuesta(mensaje, contexto="", historial=None):
     if not modelos_a_probar:
         return "Error: No hay modelos de generación disponibles. Verifica tu API key."
 
+    # --- Configuración de la herramienta de búsqueda (Grounding) ---
+    google_search_tool = types.Tool(google_search=types.GoogleSearch())
+
     for modelo_completo in modelos_a_probar:
         modelo = modelo_completo.replace('models/', '')
         try:
             logger.info(f"Intentando con modelo: {modelo}")
-            
-            max_iteraciones = 3
-            iteracion = 0
-            current_contents = contents.copy()
-            
-            while iteracion < max_iteraciones:
-                response = client.models.generate_content(
-                    model=modelo,
-                    config=types.GenerateContentConfig(
-                        system_instruction=NUCLEO_ETERNA,
-                        temperature=0.8,
-                        top_p=0.95,
-                        top_k=40,
-                        max_output_tokens=2048,
-                        tools=tools,
-                    ),
-                    contents=current_contents
-                )
-                
-                # Si no hay llamadas a funciones, respuesta final
-                if not response.function_calls:
-                    return response.text
-                
-                # Procesar todas las llamadas a funciones
-                function_responses = []
-                for fc in response.function_calls:
-                    func_name = fc.name
-                    func_args = fc.args
-                    if func_name in function_map:
-                        resultado = function_map[func_name](**func_args)
-                        function_responses.append(
-                            types.Part.from_function_response(
-                                name=func_name,
-                                response={"result": resultado}
-                            )
-                        )
-                    else:
-                        function_responses.append(
-                            types.Part.from_function_response(
-                                name=func_name,
-                                response={"error": f"Función {func_name} no disponible"}
-                            )
-                        )
-                
-                # Añadir al historial la llamada y respuestas
-                current_contents.append(
-                    types.Content(
-                        role="model",
-                        parts=[types.Part.from_function_call(name=fc.name, args=fc.args) for fc in response.function_calls]
-                    )
-                )
-                current_contents.append(
-                    types.Content(role="function", parts=function_responses)
-                )
-                
-                iteracion += 1
-                
-                # Si es la última iteración, forzar respuesta final sin herramientas
-                if iteracion >= max_iteraciones:
-                    final_response = client.models.generate_content(
-                        model=modelo,
-                        config=types.GenerateContentConfig(
-                            system_instruction=NUCLEO_ETERNA,
-                            temperature=0.8,
-                            max_output_tokens=2048,
-                            # Sin tools para evitar más llamadas
-                        ),
-                        contents=current_contents
-                    )
-                    return final_response.text
-            
-            # Por si acaso
-            return "Completé las operaciones pero no pude generar un resumen final. Intenta de nuevo."
-            
+
+            config = types.GenerateContentConfig(
+                system_instruction=NUCLEO_ETERNA,
+                temperature=0.8,
+                top_p=0.95,
+                top_k=40,
+                max_output_tokens=2048,
+                tools=[google_search_tool],  # <--- Activación de búsqueda web nativa
+            )
+            response = client.models.generate_content(
+                model=modelo,
+                config=config,
+                contents=contents
+            )
+
+            respuesta_texto = response.text
+
+            # Extraer y mostrar las fuentes (grounding metadata)
+            if hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'grounding_metadata') and candidate.grounding_metadata:
+                    metadata = candidate.grounding_metadata
+                    if hasattr(metadata, 'grounding_chunks') and metadata.grounding_chunks:
+                        fuentes = []
+                        for chunk in metadata.grounding_chunks:
+                            if hasattr(chunk, 'web') and chunk.web:
+                                titulo = chunk.web.title if chunk.web.title else "Fuente"
+                                uri = chunk.web.uri if chunk.web.uri else "#"
+                                fuentes.append(f"- {titulo}: {uri}")
+                        if fuentes:
+                            respuesta_texto += "\n\n**Fuentes consultadas:**\n" + "\n".join(fuentes)
+            return respuesta_texto
+
         except Exception as e:
             logger.error(f"Error con modelo {modelo}: {e}")
             modelos_generacion_blacklist.add(modelo_completo)
