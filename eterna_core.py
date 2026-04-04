@@ -375,8 +375,6 @@ def buscar_en_web(consulta: str, num_resultados: int = 3) -> str:
 def ejecutar_python_seguro(codigo: str, timeout_segundos: int = 10) -> str:
     """
     Ejecuta código Python en un sandbox usando subprocess.
-    MUY IMPORTANTE: No es 100% seguro contra ataques avanzados, pero suficiente para un entorno controlado.
-    Para producción real, usar docker o firejail.
     """
     # Lista negra de imports peligrosos
     imports_peligrosos = ['os', 'subprocess', 'sys', 'shutil', 'importlib', '__builtins__', 'eval', 'exec', 'compile', 'open', 'file']
@@ -390,13 +388,12 @@ def ejecutar_python_seguro(codigo: str, timeout_segundos: int = 10) -> str:
         temp_path = f.name
     
     try:
-        # Ejecutar en subproceso con límite de tiempo y entorno vacío
         result = subprocess.run(
             ['python3', temp_path],
             capture_output=True,
             text=True,
             timeout=timeout_segundos,
-            env={}  # Entorno vacío por seguridad
+            env={}
         )
         if result.returncode == 0:
             return f"✅ Código ejecutado correctamente:\n{result.stdout}"
@@ -407,7 +404,6 @@ def ejecutar_python_seguro(codigo: str, timeout_segundos: int = 10) -> str:
     except Exception as e:
         return f"Error inesperado: {str(e)}"
     finally:
-        # Limpiar archivo temporal
         try:
             os.unlink(temp_path)
         except:
@@ -441,13 +437,9 @@ def traducir_texto(texto: str, idioma_destino: str = "es") -> str:
 def investigar_tema(consulta: str, profundidad: str = "media") -> str:
     """
     Herramienta poderosa para investigar cualquier tema.
-    Versión corregida y robusta.
     """
     try:
-        # Buscar en memoria local
         contexto_local = buscar_textos_similares(consulta, k=5)
-        
-        # Búsqueda web mejorada
         resultado_web = buscar_en_web_mejorada(consulta, num_resultados=5)
         
         prompt_investigacion = f"""
@@ -564,9 +556,6 @@ def controlar_dispositivo(entidad: str, accion: str) -> str:
         return f"Error conectando con Home Assistant: {str(e)}"
 
 def leer_codigo(archivo: str) -> str:
-    """
-    Lee el contenido de un archivo .py del repositorio (solo .py permitidos).
-    """
     if not archivo.endswith('.py'):
         return "Solo puedo leer archivos .py por seguridad."
     if '..' in archivo or archivo.startswith('/'):
@@ -683,7 +672,7 @@ tools = [
         ),
         types.FunctionDeclaration(
             name="predimensionar_estructura",
-            description="Predimensiona elementos estructurales (vigas, columnas, losas, zapatas, pedestales, escaleras) según normativa venezolana (COVENIN, Manual MINDUR).",
+            description="Predimensiona elementos estructurales (vigas, columnas, losas, zapatas, pedestales, escaleras) según normativa venezolana.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -719,14 +708,11 @@ tools = [
         ),
         types.FunctionDeclaration(
             name="leer_codigo",
-            description="Lee el contenido de un archivo .py del repositorio. Útil para que ETERNA pueda auditar su propio código y proponer mejoras.",
+            description="Lee el contenido de un archivo .py del repositorio.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "archivo": {
-                        "type": "string",
-                        "description": "Nombre del archivo .py a leer (ej. 'eterna_core.py')."
-                    }
+                    "archivo": {"type": "string", "description": "Nombre del archivo .py a leer (ej. 'eterna_core.py')."}
                 },
                 "required": ["archivo"]
             }
@@ -737,21 +723,15 @@ tools = [
             parameters={
                 "type": "object",
                 "properties": {
-                    "consulta": {
-                        "type": "string",
-                        "description": "La consulta de búsqueda, clara y específica."
-                    },
-                    "num_resultados": {
-                        "type": "integer",
-                        "description": "Número de resultados a devolver (por defecto 3)."
-                    }
+                    "consulta": {"type": "string", "description": "La consulta de búsqueda, clara y específica."},
+                    "num_resultados": {"type": "integer", "description": "Número de resultados a devolver (por defecto 3)."}
                 },
                 "required": ["consulta"]
             }
         ),
         types.FunctionDeclaration(
             name="investigar_tema",
-            description="Investiga cualquier tema en profundidad. Úsalo cuando Papá pregunte sobre cualquier cosa (negocios, ideas, investigación general, tendencias, etc.). Muy útil para responder 'cualquier cosa'.",
+            description="Investiga cualquier tema en profundidad. Muy útil para responder 'cualquier cosa'.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -763,7 +743,7 @@ tools = [
         ),
         types.FunctionDeclaration(
             name="ejecutar_python_seguro",
-            description="Ejecuta código Python en un sandbox seguro. Útil para cálculos complejos, procesamiento de datos o scripts temporales.",
+            description="Ejecuta código Python en un sandbox seguro.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -842,7 +822,7 @@ def cargar_modelos_embedding():
         logger.error(f"Error al cargar modelos de embedding: {e}")
         return []
 
-# ---------- FUNCIÓN PRINCIPAL (CON MÚLTIPLES HERRAMIENTAS EN CADENA) ----------
+# ---------- FUNCIÓN PRINCIPAL CORREGIDA (SIN BUCLE INFINITO) ----------
 def generar_respuesta(mensaje, contexto="", historial=None):
     global modelos_generacion_cache, modelos_generacion_blacklist
 
@@ -872,8 +852,7 @@ def generar_respuesta(mensaje, contexto="", historial=None):
         try:
             logger.info(f"Intentando con modelo: {modelo}")
             
-            # Bucle para manejar múltiples rondas de llamadas a herramientas
-            max_iteraciones = 5
+            max_iteraciones = 3
             iteracion = 0
             current_contents = contents.copy()
             
@@ -891,11 +870,11 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                     contents=current_contents
                 )
                 
-                # Si no hay llamadas a funciones, devolver respuesta final
+                # Si no hay llamadas a funciones, respuesta final
                 if not response.function_calls:
                     return response.text
                 
-                # Procesar todas las llamadas a funciones de esta ronda
+                # Procesar todas las llamadas a funciones
                 function_responses = []
                 for fc in response.function_calls:
                     func_name = fc.name
@@ -916,7 +895,7 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                             )
                         )
                 
-                # Añadir al historial la llamada del modelo y las respuestas de las funciones
+                # Añadir al historial la llamada y respuestas
                 current_contents.append(
                     types.Content(
                         role="model",
@@ -928,9 +907,25 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                 )
                 
                 iteracion += 1
+                
+                # Si es la última iteración, forzar respuesta final sin herramientas
+                if iteracion >= max_iteraciones:
+                    final_response = client.models.generate_content(
+                        model=modelo,
+                        config=types.GenerateContentConfig(
+                            system_instruction=NUCLEO_ETERNA,
+                            temperature=0.8,
+                            top_p=0.95,
+                            top_k=40,
+                            max_output_tokens=2048,
+                            # Sin tools para evitar más llamadas
+                        ),
+                        contents=current_contents
+                    )
+                    return final_response.text
             
-            # Si se exceden iteraciones, devolver un mensaje
-            return "He realizado varias operaciones pero necesito más pasos. ¿Podemos simplificar la solicitud?"
+            # Por si acaso
+            return "Completé las operaciones pero no pude generar un resumen final. Intenta de nuevo."
             
         except Exception as e:
             logger.error(f"Error con modelo {modelo}: {e}")
@@ -1019,7 +1014,6 @@ def obtener_historial_reciente(limit=10):
 
 # ---------- AGENTE DE FONDO (AUTONOMÍA) ----------
 def enviar_alerta_telegram(mensaje):
-    """Envía una alerta por Telegram si están configuradas las variables de entorno."""
     token = os.environ.get("TELEGRAM_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if token and chat_id:
@@ -1033,10 +1027,9 @@ def enviar_alerta_telegram(mensaje):
         logger.debug("Telegram no configurado, alerta no enviada.")
 
 def agente_background():
-    """Hilo de fondo que revisa tareas y clima periódicamente."""
     while True:
         try:
-            # Revisar tareas próximas (falta 1 día o menos)
+            # Revisar tareas próximas
             with db_lock:
                 c = conn.cursor()
                 c.execute("SELECT descripcion, fecha_limite FROM tareas WHERE fecha_limite IS NOT NULL AND completada=0")
@@ -1050,33 +1043,27 @@ def agente_background():
                     except:
                         pass
             
-            # Consultar clima y alertar si hay tormenta o lluvia fuerte
-            clima = consultar_clima("Caracas")  # Puedes parametrizar ciudad
+            # Consultar clima
+            clima = consultar_clima("Caracas")
             if "tormenta" in clima.lower() or "lluvia" in clima.lower() or "storm" in clima.lower():
                 enviar_alerta_telegram(f"🌧️ Alerta climática: {clima}")
-            
-            # Aquí puedes agregar más monitoreos: estado del búnker, sensores HA, etc.
             
         except Exception as e:
             logger.error(f"Error en agente_background: {e}")
         
-        time.sleep(3600)  # Cada hora
+        time.sleep(3600)
 
 def iniciar_agente():
-    """Inicia el hilo del agente de fondo."""
     hilo = threading.Thread(target=agente_background, daemon=True)
     hilo.start()
     logger.info("Agente de fondo iniciado.")
 
-# Iniciar automáticamente el agente al importar el módulo
 iniciar_agente()
 
 # ---------- PUNTO DE ENTRADA PARA PRUEBAS ----------
 if __name__ == "__main__":
-    # Configurar logging básico para pruebas
     logging.basicConfig(level=logging.INFO)
     print("Eterna Core inicializado. Modo de prueba.")
     print("Ejemplo: generar_respuesta('Hola Eterna, ¿cómo estás?')")
-    # Prueba simple
     respuesta = generar_respuesta("Hola Eterna, ¿cómo estás?")
     print(respuesta)
