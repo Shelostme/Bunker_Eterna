@@ -12,3 +12,4 @@ browser-use
 playwright
 langchain
 langchain-google-genai
+protobuf==3.20.3
