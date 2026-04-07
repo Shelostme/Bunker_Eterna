@@ -8,4 +8,7 @@ google
 duckduckgo-search
 yfinance
 googletrans==4.0.0-rc1
-duckduckgo-search
+browser-use
+playwright
+langchain
+langchain-google-genai
