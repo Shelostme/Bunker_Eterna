@@ -13,3 +13,6 @@ playwright
 langchain
 langchain-google-genai
 protobuf==3.20.3
+browser-use
+langchain-google-genai
+playwright
