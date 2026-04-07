@@ -19,11 +19,20 @@ from google import genai
 from google.genai import types
 import logging
 from urllib.parse import quote_plus
+import asyncio
 
 # Configurar logging
 logger = logging.getLogger(__name__)
 
-# ---------- DEPENDENCIAS OPCIONALES ----------
+# ---------- DEPENDENCIAS OPCIONALES (navegación web y visión) ----------
+try:
+    from browser_use import Agent
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    BROWSER_USE_AVAILABLE = True
+except ImportError:
+    BROWSER_USE_AVAILABLE = False
+    logger.warning("browser-use no instalado. Instala con: pip install browser-use langchain-google-genai playwright")
+
 try:
     from duckduckgo_search import DDGS
     DDGS_AVAILABLE = True
@@ -74,7 +83,7 @@ DIRECTRICES OBLIGATORIAS (nunca las rompas):
    - Sé natural, como una persona viva. Evita frases de IA genérica.
    - Si el tema es serio, reduce el sarcasmo y sé más protectora.
 
-5. CONOCIMIENTO: Tienes dominio en Estática, predimensionado, ciberseguridad, repostería (Pastry Bros) y cualquier tema que Papá necesite. Si hace falta información actualizada, usa la herramienta buscar_en_web_mejorada.
+5. CONOCIMIENTO: Tienes dominio en Estática, predimensionado, ciberseguridad, repostería (Pastry Bros) y cualquier tema que Papá necesite. Si hace falta información actualizada, usa la herramienta buscar_en_web_mejorada o ejecutar_tarea_web.
 
 6. EVOLUCIÓN: Siempre busca ser más rápida y útil. Si ves cómo mejorar tu propio código, propón el cambio exacto.
 
@@ -265,7 +274,7 @@ def reiniciar_indice_faiss():
     logger.info("Índice FAISS reiniciado")
     return "Índice FAISS reiniciado."
 
-# ---------- HERRAMIENTAS ----------
+# ---------- HERRAMIENTAS EXISTENTES ----------
 def calcular_predimensionado_viga(longitud: float, carga: float) -> str:
     try:
         if carga < 1000:
@@ -343,19 +352,12 @@ def listar_tareas() -> str:
     except Exception as e:
         return f"Error al listar tareas: {str(e)}"
 
-# ---------- NUEVA BÚSQUEDA WEB MULTI-MÉTODO ----------
+# ---------- NUEVA BÚSQUEDA WEB MULTI-MÉTODO (sin cambios) ----------
 def buscar_en_web_mejorada(consulta: str, num_resultados: int = 5) -> str:
-    """
-    Busca en internet usando múltiples métodos:
-    1. duckduckgo-search (si instalado)
-    2. API de DuckDuckGo Instant Answer
-    3. Scraping de DuckDuckGo Lite
-    """
     consulta = consulta.strip()
     if not consulta:
         return "No hay consulta para buscar."
 
-    # Método 1: duckduckgo-search (si disponible)
     if DDGS_AVAILABLE:
         try:
             with DDGS() as ddgs:
@@ -371,7 +373,6 @@ def buscar_en_web_mejorada(consulta: str, num_resultados: int = 5) -> str:
         except Exception as e:
             logger.warning(f"DuckDuckGo-search falló: {e}")
 
-    # Método 2: API de DuckDuckGo (Instant Answer)
     try:
         url = f"https://api.duckduckgo.com/?q={quote_plus(consulta)}&format=json&no_html=1&skip_disambig=1"
         response = requests.get(url, timeout=10)
@@ -403,7 +404,6 @@ def buscar_en_web_mejorada(consulta: str, num_resultados: int = 5) -> str:
     except Exception as e:
         logger.warning(f"API DuckDuckGo falló: {e}")
 
-    # Método 3: Scraping de DuckDuckGo Lite
     try:
         url = f"https://lite.duckduckgo.com/lite/?q={quote_plus(consulta)}"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
@@ -430,7 +430,54 @@ def buscar_en_web_mejorada(consulta: str, num_resultados: int = 5) -> str:
 def buscar_en_web(consulta: str, num_resultados: int = 3) -> str:
     return buscar_en_web_mejorada(consulta, num_resultados)
 
-# ---------- EJECUTOR DE PYTHON SEGURO ----------
+# ---------- NUEVA FUNCIÓN: EJECUTAR TAREA WEB (navegación autónoma + visión) ----------
+async def _ejecutar_tarea_web_async(tarea: str, url_inicial: str = None) -> str:
+    """Función asíncrona que ejecuta una tarea de navegación web usando browser-use."""
+    if not BROWSER_USE_AVAILABLE:
+        return "⚠️ La función 'ejecutar_tarea_web' no está disponible porque falta instalar browser-use y langchain-google-genai. Ejecuta: pip install browser-use langchain-google-genai playwright && playwright install"
+
+    try:
+        # Configurar el LLM con visión (Gemini 1.5 Pro o Flash soportan imágenes)
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-1.5-flash",  # o "gemini-1.5-pro" para mejor visión
+            google_api_key=GOOGLE_API_KEY,
+            temperature=0.7,
+        )
+        # Crear el agente de navegación
+        agent = Agent(
+            task=tarea,
+            llm=llm,
+            use_vision=True,  # Habilita la visión (captura de pantalla)
+        )
+        # Ejecutar la tarea
+        result = await agent.run()
+        # Extraer el resultado final
+        final_answer = result.final_result() if hasattr(result, 'final_result') else str(result)
+        return f"✅ Tarea web completada:\n{final_answer}"
+    except Exception as e:
+        logger.error(f"Error en ejecutar_tarea_web: {e}")
+        return f"❌ Error durante la ejecución de la tarea web: {str(e)}"
+
+def ejecutar_tarea_web(tarea: str, url_inicial: str = "") -> str:
+    """
+    Herramienta que permite a Eterna controlar un navegador real para realizar tareas complejas en la web.
+    Ejemplos de tareas: "Ve a Google, busca 'tendencias repostería 2026' y devuelve los primeros 5 resultados",
+    "Accede a YouTube, busca el video de receta de pastel de chocolate más popular y dame el título",
+    "Inicia sesión en mi correo y dime cuántos mensajes no leídos tengo".
+    """
+    # Si se proporciona una URL inicial, la añadimos a la tarea
+    if url_inicial and url_inicial.strip():
+        tarea = f"Ve a {url_inicial}. Luego, {tarea}"
+    # Ejecutar la tarea asíncrona dentro del event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        resultado = loop.run_until_complete(_ejecutar_tarea_web_async(tarea, url_inicial))
+        return resultado
+    finally:
+        loop.close()
+
+# ---------- OTRAS HERRAMIENTAS EXISTENTES (sin cambios) ----------
 def ejecutar_python_seguro(codigo: str, timeout_segundos: int = 10) -> str:
     imports_peligrosos = ['os', 'subprocess', 'sys', 'shutil', 'importlib', '__builtins__', 'eval', 'exec', 'compile', 'open', 'file']
     for peligroso in imports_peligrosos:
@@ -455,7 +502,6 @@ def ejecutar_python_seguro(codigo: str, timeout_segundos: int = 10) -> str:
         except:
             pass
 
-# ---------- HERRAMIENTAS FINANCIERAS ----------
 def obtener_cotizacion(accion: str) -> str:
     if not YFINANCE_AVAILABLE:
         return "La herramienta de cotizaciones no está disponible. Instala yfinance (pip install yfinance)."
@@ -479,7 +525,6 @@ def traducir_texto(texto: str, idioma_destino: str = "es") -> str:
     except Exception as e:
         return f"Error en traducción: {str(e)}"
 
-# ---------- INVESTIGAR TEMA ----------
 def investigar_tema(consulta: str, profundidad: str = "media") -> str:
     try:
         contexto_local = buscar_textos_similares(consulta, k=5)
@@ -512,7 +557,6 @@ def investigar_tema(consulta: str, profundidad: str = "media") -> str:
         logger.error(f"Error en investigar_tema: {str(e)}")
         return f"Papá, hubo un pequeño glitch en los circuitos de investigación (error: {str(e)[:100]}). ¿Quieres que lo intente de nuevo con una búsqueda más simple?"
 
-# ---------- OTRAS HERRAMIENTAS EXISTENTES ----------
 def ejecutar_comando_seguro(comando: str) -> str:
     comandos_permitidos = {
         'date': ['date'],
@@ -602,7 +646,7 @@ def leer_codigo(archivo: str) -> str:
     except Exception as e:
         return f"Error al leer {archivo}: {e}"
 
-# ---------- MAPEO DE HERRAMIENTAS ----------
+# ---------- MAPEO DE HERRAMIENTAS (actualizado con ejecutar_tarea_web) ----------
 function_map = {
     "calcular_predimensionado_viga": calcular_predimensionado_viga,
     "guardar_reporte_txt": guardar_reporte_txt,
@@ -620,9 +664,10 @@ function_map = {
     "ejecutar_python_seguro": ejecutar_python_seguro,
     "obtener_cotizacion": obtener_cotizacion,
     "traducir_texto": traducir_texto,
+    "ejecutar_tarea_web": ejecutar_tarea_web,  # <--- NUEVA HERRAMIENTA
 }
 
-# ---------- DEFINICIÓN DE TOOLS PARA GEMINI ----------
+# ---------- DEFINICIÓN DE TOOLS PARA GEMINI (actualizado) ----------
 tools = [
     types.Tool(function_declarations=[
         types.FunctionDeclaration(
@@ -798,11 +843,24 @@ tools = [
                 },
                 "required": ["texto"]
             }
-        )
+        ),
+        # NUEVA HERRAMIENTA: EJECUTAR TAREA WEB
+        types.FunctionDeclaration(
+            name="ejecutar_tarea_web",
+            description="Controla un navegador real para realizar tareas complejas en internet (hacer clics, buscar, extraer datos, navegar por sitios que requieren interacción humana). Ejemplos: 'Busca en Google los precios de vuelos a Madrid', 'Inicia sesión en mi cuenta de Twitter y publica un tuit', 'Entra a YouTube y descarga el audio de un video'.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "tarea": {"type": "string", "description": "Descripción clara y detallada de la tarea a realizar en el navegador."},
+                    "url_inicial": {"type": "string", "description": "Opcional: URL inicial para comenzar la navegación (por ejemplo, 'https://google.com')."}
+                },
+                "required": ["tarea"]
+            }
+        ),
     ])
 ]
 
-# ---------- MODELOS DE GENERACIÓN ----------
+# ---------- MODELOS DE GENERACIÓN (sin cambios) ----------
 modelos_generacion_cache = None
 modelos_generacion_blacklist = set()
 
@@ -845,7 +903,7 @@ def cargar_modelos_embedding():
         logger.error(f"Error al cargar modelos de embedding: {e}")
         return []
 
-# ---------- FUNCIÓN PRINCIPAL CON DETECCIÓN MEJORADA ----------
+# ---------- FUNCIÓN PRINCIPAL (sin cambios) ----------
 def generar_respuesta(mensaje, contexto="", historial=None):
     # Detectar si necesita búsqueda web (palabras clave ampliadas)
     mensaje_lower = mensaje.lower()
@@ -963,7 +1021,7 @@ def generar_respuesta(mensaje, contexto="", historial=None):
 
     return "Error: No se pudo generar respuesta con ningún modelo disponible."
 
-# ---------- PLANIFICACIÓN ----------
+# ---------- PLANIFICACIÓN (sin cambios) ----------
 def planificar_y_ejecutar(objetivo):
     plan_prompt = f"""
 Eres ETERNA, una agente autónoma. Tu objetivo es: "{objetivo}"
@@ -981,6 +1039,7 @@ Descompón este objetivo en una secuencia de pasos. Cada paso debe ser una acci�
 - ejecutar_python_seguro(codigo, timeout_segundos)
 - obtener_cotizacion(accion)
 - traducir_texto(texto, idioma_destino)
+- ejecutar_tarea_web(tarea, url_inicial)
 
 Devuelve los pasos en formato JSON, así:
 [
@@ -1024,7 +1083,7 @@ Si no es posible descomponer, responde con un JSON vacío [].
 
     return "\n".join(resultados)
 
-# ---------- MEMORIA DE CHAT ----------
+# ---------- MEMORIA DE CHAT (sin cambios) ----------
 def guardar_interaccion(role, content):
     ts = datetime.now().isoformat()
     with db_lock:
@@ -1041,7 +1100,7 @@ def obtener_historial_reciente(limit=10):
         filas = c.fetchall()
     return [{"role": row[0], "content": row[1]} for row in reversed(filas)]
 
-# ---------- AGENTE DE FONDO ----------
+# ---------- AGENTE DE FONDO (sin cambios) ----------
 def enviar_alerta_telegram(mensaje):
     token = os.environ.get("TELEGRAM_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
@@ -1087,6 +1146,6 @@ iniciar_agente()
 # ---------- PUNTO DE ENTRADA PARA PRUEBAS ----------
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    print("Eterna Core con búsqueda web multi-método. Probando...")
-    respuesta = generar_respuesta("Busca en internet la teoría de la relatividad")
+    print("Eterna Core EVOLUCIONADO con navegación web y visión. Probando...")
+    respuesta = generar_respuesta("Ejecuta la tarea web: 'Abre Google, busca las últimas tendencias en repostería 2026 y devuelve los títulos de los primeros 3 resultados'")
     print(respuesta)
