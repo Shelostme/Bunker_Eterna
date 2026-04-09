@@ -20,9 +20,13 @@ from google.genai import types
 import logging
 from urllib.parse import quote_plus
 import asyncio
+import nest_asyncio  # Necesario para ejecutar asyncio en entornos con loop ya corriendo
 
 # Configurar logging
 logger = logging.getLogger(__name__)
+
+# Aplicar nest_asyncio para permitir bucles anidados (útil en Streamlit/Codespaces)
+nest_asyncio.apply()
 
 # ---------- DEPENDENCIAS OPCIONALES (navegación web y visión) ----------
 try:
@@ -60,6 +64,140 @@ if not GOOGLE_API_KEY:
     raise ValueError("Falta GOOGLE_API_KEY en variables de entorno")
 
 client = genai.Client(api_key=GOOGLE_API_KEY)
+
+# ========== NUEVOS MÓDULOS INSPIRADOS EN RABBIT ==========
+# (Se insertan antes del resto del código para que estén disponibles globalmente)
+
+# 1. PLANIFICADOR (Planner)
+class Planner:
+    """Descompone objetivos en pasos ejecutables por Eterna."""
+    
+    def __init__(self, llm_client):
+        self.llm = llm_client
+        # Las herramientas se obtendrán después de que function_map esté definido,
+        # por eso se inicializará más tarde. Por ahora lo dejamos vacío.
+        self.tools_list = []
+    
+    def set_tools(self, tools_list):
+        self.tools_list = tools_list
+    
+    def planify(self, objective: str, max_steps: int = 5) -> list:
+        """Devuelve una lista de diccionarios: {'tool': 'nombre', 'args': {...}}"""
+        if not self.tools_list:
+            return []
+        prompt = f"""
+        Eres el planificador de Eterna. Tu tarea es descomponer este objetivo en pasos usando SOLO las herramientas disponibles.
+        Herramientas: {', '.join(self.tools_list)}
+        Objetivo: {objective}
+        Máximo {max_steps} pasos.
+        Responde EXCLUSIVAMENTE con un JSON array de pasos, cada paso con 'tool' y 'args'.
+        Ejemplo: [{{"tool": "buscar_en_web", "args": {{"consulta": "IA"}}}}, {{"tool": "guardar_reporte_txt", "args": {{"titulo": "resultado", "contenido": "..."}}}}]
+        """
+        try:
+            response = self.llm.generate_content(
+                model="gemini-1.5-flash",
+                config=types.GenerateContentConfig(temperature=0.2),
+                contents=[types.Content(role="user", parts=[types.Part(text=prompt)])]
+            )
+            text = response.text.strip()
+            # Extraer JSON
+            start = text.find('[')
+            end = text.rfind(']') + 1
+            if start != -1 and end != 0:
+                return json.loads(text[start:end])
+            else:
+                return []
+        except Exception as e:
+            logger.error(f"Planner error: {e}")
+            return []
+
+# 2. MEMORIA MEJORADA (EnhancedMemory)
+class EnhancedMemory:
+    """Guarda y recupera resultados de tareas, no solo conversaciones."""
+    
+    def __init__(self, db_path='eterna_memory.db'):
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn.execute('''CREATE TABLE IF NOT EXISTS task_results 
+                            (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                             task TEXT,
+                             result TEXT,
+                             timestamp TEXT)''')
+        self.conn.commit()
+    
+    def save_task_result(self, task: str, result: str):
+        ts = datetime.now().isoformat()
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT INTO task_results (task, result, timestamp) VALUES (?, ?, ?)",
+                       (task, result, ts))
+        self.conn.commit()
+        return cursor.lastrowid
+    
+    def find_similar_tasks(self, query: str, limit: int = 3) -> list:
+        """Busca tareas pasadas que sean similares a la consulta (búsqueda simple por palabras clave)."""
+        cursor = self.conn.cursor()
+        palabras = query.lower().split()
+        condiciones = " OR ".join([f"task LIKE ?" for _ in palabras])
+        params = [f"%{p}%" for p in palabras]
+        cursor.execute(f"SELECT task, result FROM task_results WHERE {condiciones} ORDER BY timestamp DESC LIMIT ?", params + [limit])
+        return cursor.fetchall()
+
+# 3. CONTROLADOR DE NAVEGACIÓN (BrowserController) - opcional, no se usa aún
+class BrowserController:
+    """Controla el navegador con Playwright de forma fiable."""
+    
+    def __init__(self, headless: bool = False):
+        self.headless = headless
+        self.browser = None
+        self.page = None
+        self.playwright = None
+    
+    async def start(self):
+        from playwright.async_api import async_playwright
+        self.playwright = await async_playwright().start()
+        self.browser = await self.playwright.chromium.launch(headless=self.headless)
+        self.page = await self.browser.new_page()
+        return self.page
+    
+    async def close(self):
+        if self.browser:
+            await self.browser.close()
+        if self.playwright:
+            await self.playwright.stop()
+    
+    async def navigate(self, url: str, timeout: int = 30000):
+        await self.page.goto(url, timeout=timeout)
+        return await self.page.title()
+    
+    async def fill_and_submit(self, selector: str, text: str):
+        await self.page.fill(selector, text)
+        await self.page.press(selector, 'Enter')
+    
+    async def get_text(self, selector: str) -> str:
+        return await self.page.inner_text(selector)
+
+# 4. REGISTRO DE HERRAMIENTAS (ToolRegistry)
+class ToolRegistry:
+    """Permite registrar, listar y ejecutar herramientas de forma unificada."""
+    
+    def __init__(self):
+        self.tools = {}
+    
+    def register(self, name: str, func):
+        self.tools[name] = func
+    
+    def register_batch(self, tools_dict):
+        self.tools.update(tools_dict)
+    
+    def execute(self, tool_name: str, **kwargs):
+        if tool_name in self.tools:
+            return self.tools[tool_name](**kwargs)
+        else:
+            return f"Herramienta '{tool_name}' no registrada."
+    
+    def list_tools(self):
+        return list(self.tools.keys())
+
+# ========== FIN DE NUEVOS MÓDULOS ==========
 
 # ---------- PERSONALIDAD (sin cambios) ----------
 NUCLEO_ETERNA = """
@@ -412,7 +550,7 @@ def buscar_en_web_mejorada(consulta: str, num_resultados: int = 5) -> str:
             import html
             text = response.text
             enlaces = re.findall(r'<a href="(https?://[^"]+)"[^>]*>([^<]+)</a>', text)
-            descripciones = re.findall(r'<td class="result-snippet">([^<]+)</td>', text)
+            descripciones = re.findall(r'<td class="result-snippet">([^<]+)</tr>', text)
             resultados = []
             for i, (url_enlace, titulo) in enumerate(enlaces[:num_resultados]):
                 desc = descripciones[i] if i < len(descripciones) else "Sin descripción"
@@ -437,21 +575,17 @@ async def _ejecutar_tarea_web_async(tarea: str, url_inicial: str = None) -> str:
         return "⚠️ La función 'ejecutar_tarea_web' no está disponible porque falta instalar browser-use y langchain-google-genai. Ejecuta: pip install browser-use langchain-google-genai playwright && playwright install"
 
     try:
-        # Configurar el LLM con visión (Gemini 1.5 Pro o Flash soportan imágenes)
         llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",  # o "gemini-1.5-pro" para mejor visión
+            model="gemini-1.5-flash",
             google_api_key=GOOGLE_API_KEY,
             temperature=0.7,
         )
-        # Crear el agente de navegación
         agent = Agent(
             task=tarea,
             llm=llm,
-            use_vision=True,  # Habilita la visión (captura de pantalla)
+            use_vision=True,
         )
-        # Ejecutar la tarea
         result = await agent.run()
-        # Extraer el resultado final
         final_answer = result.final_result() if hasattr(result, 'final_result') else str(result)
         return f"✅ Tarea web completada:\n{final_answer}"
     except Exception as e:
@@ -459,16 +593,8 @@ async def _ejecutar_tarea_web_async(tarea: str, url_inicial: str = None) -> str:
         return f"❌ Error durante la ejecución de la tarea web: {str(e)}"
 
 def ejecutar_tarea_web(tarea: str, url_inicial: str = "") -> str:
-    """
-    Herramienta que permite a Eterna controlar un navegador real para realizar tareas complejas en la web.
-    Ejemplos de tareas: "Ve a Google, busca 'tendencias repostería 2026' y devuelve los primeros 5 resultados",
-    "Accede a YouTube, busca el video de receta de pastel de chocolate más popular y dame el título",
-    "Inicia sesión en mi correo y dime cuántos mensajes no leídos tengo".
-    """
-    # Si se proporciona una URL inicial, la añadimos a la tarea
     if url_inicial and url_inicial.strip():
         tarea = f"Ve a {url_inicial}. Luego, {tarea}"
-    # Ejecutar la tarea asíncrona dentro del event loop
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -646,7 +772,7 @@ def leer_codigo(archivo: str) -> str:
     except Exception as e:
         return f"Error al leer {archivo}: {e}"
 
-# ---------- MAPEO DE HERRAMIENTAS (actualizado con ejecutar_tarea_web) ----------
+# ---------- MAPEO DE HERRAMIENTAS (actualizado) ----------
 function_map = {
     "calcular_predimensionado_viga": calcular_predimensionado_viga,
     "guardar_reporte_txt": guardar_reporte_txt,
@@ -664,7 +790,7 @@ function_map = {
     "ejecutar_python_seguro": ejecutar_python_seguro,
     "obtener_cotizacion": obtener_cotizacion,
     "traducir_texto": traducir_texto,
-    "ejecutar_tarea_web": ejecutar_tarea_web,  # <--- NUEVA HERRAMIENTA
+    "ejecutar_tarea_web": ejecutar_tarea_web,
 }
 
 # ---------- DEFINICIÓN DE TOOLS PARA GEMINI (actualizado) ----------
@@ -844,15 +970,14 @@ tools = [
                 "required": ["texto"]
             }
         ),
-        # NUEVA HERRAMIENTA: EJECUTAR TAREA WEB
         types.FunctionDeclaration(
             name="ejecutar_tarea_web",
-            description="Controla un navegador real para realizar tareas complejas en internet (hacer clics, buscar, extraer datos, navegar por sitios que requieren interacción humana). Ejemplos: 'Busca en Google los precios de vuelos a Madrid', 'Inicia sesión en mi cuenta de Twitter y publica un tuit', 'Entra a YouTube y descarga el audio de un video'.",
+            description="Controla un navegador real para realizar tareas complejas en internet (hacer clics, buscar, extraer datos, navegar por sitios que requieren interacción humana).",
             parameters={
                 "type": "object",
                 "properties": {
                     "tarea": {"type": "string", "description": "Descripción clara y detallada de la tarea a realizar en el navegador."},
-                    "url_inicial": {"type": "string", "description": "Opcional: URL inicial para comenzar la navegación (por ejemplo, 'https://google.com')."}
+                    "url_inicial": {"type": "string", "description": "Opcional: URL inicial para comenzar la navegación."}
                 },
                 "required": ["tarea"]
             }
@@ -860,7 +985,7 @@ tools = [
     ])
 ]
 
-# ---------- MODELOS DE GENERACIÓN (sin cambios) ----------
+# ---------- MODELOS DE GENERACIÓN ----------
 modelos_generacion_cache = None
 modelos_generacion_blacklist = set()
 
@@ -903,8 +1028,46 @@ def cargar_modelos_embedding():
         logger.error(f"Error al cargar modelos de embedding: {e}")
         return []
 
-# ---------- FUNCIÓN PRINCIPAL (sin cambios) ----------
+# ---------- INSTANCIAS GLOBALES DE LOS NUEVOS MÓDULOS ----------
+planner = Planner(client)
+enhanced_memory = EnhancedMemory()
+tool_registry = ToolRegistry()
+# Registrar todas las herramientas del function_map
+tool_registry.register_batch(function_map)
+# Actualizar la lista de herramientas del planificador
+planner.set_tools(list(function_map.keys()))
+
+# ---------- FUNCIÓN PRINCIPAL MEJORADA (con planificación y memoria) ----------
 def generar_respuesta(mensaje, contexto="", historial=None):
+    # Buscar tareas similares en la memoria mejorada
+    tareas_similares = enhanced_memory.find_similar_tasks(mensaje)
+    if tareas_similares:
+        contexto_memoria = "\n[Recuerdo de tareas anteriores similares]:\n" + "\n".join([f"- {t[0]}: {t[1][:200]}" for t in tareas_similares])
+        if contexto:
+            contexto += "\n" + contexto_memoria
+        else:
+            contexto = contexto_memoria
+
+    # Detectar si es una tarea que requiere planificación (múltiples pasos)
+    palabras_clave_complejas = ["y luego", "después", "primero", "segundo", "además", "también", "luego", "finalmente"]
+    if any(p in mensaje.lower() for p in palabras_clave_complejas):
+        plan = planner.planify(mensaje)
+        if plan:
+            resultados = []
+            for paso in plan:
+                tool = paso.get('tool')
+                args = paso.get('args', {})
+                if tool in tool_registry.tools:
+                    res = tool_registry.execute(tool, **args)
+                    resultados.append(f"Paso '{tool}': {res}")
+                else:
+                    resultados.append(f"Herramienta '{tool}' no disponible")
+            resultado_final = "\n".join(resultados)
+            # Guardar en memoria mejorada
+            enhanced_memory.save_task_result(mensaje, resultado_final)
+            return resultado_final
+
+    # Si no requiere planificación, continuar con el flujo original (búsqueda web, etc.)
     # Detectar si necesita búsqueda web (palabras clave ampliadas)
     mensaje_lower = mensaje.lower()
     necesita_busqueda = any(phrase in mensaje_lower for phrase in [
@@ -966,6 +1129,10 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                 )
                 
                 if not response.function_calls:
+                    # Guardar la respuesta en memoria mejorada (opcional)
+                    # Solo si es una respuesta útil (no demasiado larga)
+                    if len(response.text) > 50:
+                        enhanced_memory.save_task_result(mensaje, response.text[:1000])
                     return response.text
                 
                 function_responses = []
@@ -1010,6 +1177,7 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                         ),
                         contents=current_contents
                     )
+                    enhanced_memory.save_task_result(mensaje, final_response.text[:1000])
                     return final_response.text
             
             return "Completé las operaciones pero no pude generar un resumen final. Intenta de nuevo."
@@ -1021,7 +1189,7 @@ def generar_respuesta(mensaje, contexto="", historial=None):
 
     return "Error: No se pudo generar respuesta con ningún modelo disponible."
 
-# ---------- PLANIFICACIÓN (sin cambios) ----------
+# ---------- PLANIFICACIÓN ----------
 def planificar_y_ejecutar(objetivo):
     plan_prompt = f"""
 Eres ETERNA, una agente autónoma. Tu objetivo es: "{objetivo}"
@@ -1083,7 +1251,7 @@ Si no es posible descomponer, responde con un JSON vacío [].
 
     return "\n".join(resultados)
 
-# ---------- MEMORIA DE CHAT (sin cambios) ----------
+# ---------- MEMORIA DE CHAT ----------
 def guardar_interaccion(role, content):
     ts = datetime.now().isoformat()
     with db_lock:
@@ -1100,7 +1268,7 @@ def obtener_historial_reciente(limit=10):
         filas = c.fetchall()
     return [{"role": row[0], "content": row[1]} for row in reversed(filas)]
 
-# ---------- AGENTE DE FONDO (sin cambios) ----------
+# ---------- AGENTE DE FONDO ----------
 def enviar_alerta_telegram(mensaje):
     token = os.environ.get("TELEGRAM_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
@@ -1146,6 +1314,6 @@ iniciar_agente()
 # ---------- PUNTO DE ENTRADA PARA PRUEBAS ----------
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    print("Eterna Core EVOLUCIONADO con navegación web y visión. Probando...")
-    respuesta = generar_respuesta("Ejecuta la tarea web: 'Abre Google, busca las últimas tendencias en repostería 2026 y devuelve los títulos de los primeros 3 resultados'")
+    print("Eterna Core EVOLUCIONADO con planificación y memoria mejorada. Probando...")
+    respuesta = generar_respuesta("Primero busca en internet las tendencias de repostería 2026, luego guarda los resultados en un reporte llamado 'tendencias'")
     print(respuesta)
