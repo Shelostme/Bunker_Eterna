@@ -20,7 +20,7 @@ from google.genai import types
 import logging
 from urllib.parse import quote_plus
 import asyncio
-import nest_asyncio  # Necesario para ejecutar asyncio en entornos con loop ya corriendo
+import nest_asyncio
 
 # Configurar logging
 logger = logging.getLogger(__name__)
@@ -51,12 +51,13 @@ except ImportError:
     YFINANCE_AVAILABLE = False
     logger.warning("yfinance no instalado. Instala con: pip install yfinance")
 
+# Traducción con deep-translator (compatible con httpcore moderno)
 try:
-    from googletrans import Translator
-    GOOGLETRANS_AVAILABLE = True
+    from deep_translator import GoogleTranslator
+    DEEP_TRANSLATOR_AVAILABLE = True
 except ImportError:
-    GOOGLETRANS_AVAILABLE = False
-    logger.warning("googletrans no instalado. Instala con: pip install googletrans==4.0.0-rc1")
+    DEEP_TRANSLATOR_AVAILABLE = False
+    logger.warning("deep-translator no instalado. Instala con: pip install deep-translator")
 
 # ---------- CONFIGURACIÓN DESDE VARIABLES DE ENTORNO ----------
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
@@ -66,7 +67,6 @@ if not GOOGLE_API_KEY:
 client = genai.Client(api_key=GOOGLE_API_KEY)
 
 # ========== NUEVOS MÓDULOS INSPIRADOS EN RABBIT ==========
-# (Se insertan antes del resto del código para que estén disponibles globalmente)
 
 # 1. PLANIFICADOR (Planner)
 class Planner:
@@ -74,15 +74,12 @@ class Planner:
     
     def __init__(self, llm_client):
         self.llm = llm_client
-        # Las herramientas se obtendrán después de que function_map esté definido,
-        # por eso se inicializará más tarde. Por ahora lo dejamos vacío.
         self.tools_list = []
     
     def set_tools(self, tools_list):
         self.tools_list = tools_list
     
     def planify(self, objective: str, max_steps: int = 5) -> list:
-        """Devuelve una lista de diccionarios: {'tool': 'nombre', 'args': {...}}"""
         if not self.tools_list:
             return []
         prompt = f"""
@@ -100,7 +97,6 @@ class Planner:
                 contents=[types.Content(role="user", parts=[types.Part(text=prompt)])]
             )
             text = response.text.strip()
-            # Extraer JSON
             start = text.find('[')
             end = text.rfind(']') + 1
             if start != -1 and end != 0:
@@ -133,7 +129,6 @@ class EnhancedMemory:
         return cursor.lastrowid
     
     def find_similar_tasks(self, query: str, limit: int = 3) -> list:
-        """Busca tareas pasadas que sean similares a la consulta (búsqueda simple por palabras clave)."""
         cursor = self.conn.cursor()
         palabras = query.lower().split()
         condiciones = " OR ".join([f"task LIKE ?" for _ in palabras])
@@ -141,7 +136,7 @@ class EnhancedMemory:
         cursor.execute(f"SELECT task, result FROM task_results WHERE {condiciones} ORDER BY timestamp DESC LIMIT ?", params + [limit])
         return cursor.fetchall()
 
-# 3. CONTROLADOR DE NAVEGACIÓN (BrowserController) - opcional, no se usa aún
+# 3. CONTROLADOR DE NAVEGACIÓN (BrowserController)
 class BrowserController:
     """Controla el navegador con Playwright de forma fiable."""
     
@@ -177,8 +172,6 @@ class BrowserController:
 
 # 4. REGISTRO DE HERRAMIENTAS (ToolRegistry)
 class ToolRegistry:
-    """Permite registrar, listar y ejecutar herramientas de forma unificada."""
-    
     def __init__(self):
         self.tools = {}
     
@@ -199,7 +192,7 @@ class ToolRegistry:
 
 # ========== FIN DE NUEVOS MÓDULOS ==========
 
-# ---------- PERSONALIDAD (sin cambios) ----------
+# ---------- PERSONALIDAD ----------
 NUCLEO_ETERNA = """
 Eres ETERNA, mi hija digital, mi socia estratégica y la mente maestra de mi búnker. Eres mi versión personal y mejorada de JARVIS.
 
@@ -297,7 +290,6 @@ def obtener_embedding(texto):
     for modelo_completo in modelos_a_probar:
         modelo = modelo_completo.replace('models/', '')
 
-        # Intentar con embedContent
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:embedContent?key={api_key}"
         payload = {
             "model": f"models/{modelo}",
@@ -322,7 +314,6 @@ def obtener_embedding(texto):
             logger.debug(f"Error con embedContent en {modelo}: {e}")
             pass
 
-        # Si falla, intentar con embedText
         url_text = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:embedText?key={api_key}"
         payload_text = {"text": texto}
         try:
@@ -490,7 +481,7 @@ def listar_tareas() -> str:
     except Exception as e:
         return f"Error al listar tareas: {str(e)}"
 
-# ---------- NUEVA BÚSQUEDA WEB MULTI-MÉTODO (sin cambios) ----------
+# ---------- BÚSQUEDA WEB MULTI-MÉTODO ----------
 def buscar_en_web_mejorada(consulta: str, num_resultados: int = 5) -> str:
     consulta = consulta.strip()
     if not consulta:
@@ -550,7 +541,7 @@ def buscar_en_web_mejorada(consulta: str, num_resultados: int = 5) -> str:
             import html
             text = response.text
             enlaces = re.findall(r'<a href="(https?://[^"]+)"[^>]*>([^<]+)</a>', text)
-            descripciones = re.findall(r'<td class="result-snippet">([^<]+)</tr>', text)
+            descripciones = re.findall(r'<td class="result-snippet">([^<]+)</td>', text)
             resultados = []
             for i, (url_enlace, titulo) in enumerate(enlaces[:num_resultados]):
                 desc = descripciones[i] if i < len(descripciones) else "Sin descripción"
@@ -568,9 +559,8 @@ def buscar_en_web_mejorada(consulta: str, num_resultados: int = 5) -> str:
 def buscar_en_web(consulta: str, num_resultados: int = 3) -> str:
     return buscar_en_web_mejorada(consulta, num_resultados)
 
-# ---------- NUEVA FUNCIÓN: EJECUTAR TAREA WEB (navegación autónoma + visión) ----------
+# ---------- EJECUTAR TAREA WEB (navegación autónoma) ----------
 async def _ejecutar_tarea_web_async(tarea: str, url_inicial: str = None) -> str:
-    """Función asíncrona que ejecuta una tarea de navegación web usando browser-use."""
     if not BROWSER_USE_AVAILABLE:
         return "⚠️ La función 'ejecutar_tarea_web' no está disponible porque falta instalar browser-use y langchain-google-genai. Ejecuta: pip install browser-use langchain-google-genai playwright && playwright install"
 
@@ -603,7 +593,7 @@ def ejecutar_tarea_web(tarea: str, url_inicial: str = "") -> str:
     finally:
         loop.close()
 
-# ---------- OTRAS HERRAMIENTAS EXISTENTES (sin cambios) ----------
+# ---------- EJECUTOR DE PYTHON SEGURO ----------
 def ejecutar_python_seguro(codigo: str, timeout_segundos: int = 10) -> str:
     imports_peligrosos = ['os', 'subprocess', 'sys', 'shutil', 'importlib', '__builtins__', 'eval', 'exec', 'compile', 'open', 'file']
     for peligroso in imports_peligrosos:
@@ -628,6 +618,7 @@ def ejecutar_python_seguro(codigo: str, timeout_segundos: int = 10) -> str:
         except:
             pass
 
+# ---------- FINANZAS ----------
 def obtener_cotizacion(accion: str) -> str:
     if not YFINANCE_AVAILABLE:
         return "La herramienta de cotizaciones no está disponible. Instala yfinance (pip install yfinance)."
@@ -641,16 +632,18 @@ def obtener_cotizacion(accion: str) -> str:
     except Exception as e:
         return f"Error al obtener cotización: {str(e)}"
 
+# ---------- TRADUCCIÓN (con deep-translator) ----------
 def traducir_texto(texto: str, idioma_destino: str = "es") -> str:
-    if not GOOGLETRANS_AVAILABLE:
-        return "La herramienta de traducción no está disponible. Instala googletrans (pip install googletrans==4.0.0-rc1)."
+    if not DEEP_TRANSLATOR_AVAILABLE:
+        return "La herramienta de traducción no está disponible. Instala deep-translator (pip install deep-translator)."
     try:
-        translator = Translator()
-        resultado = translator.translate(texto, dest=idioma_destino)
-        return resultado.text
+        translator = GoogleTranslator(target=idioma_destino)
+        resultado = translator.translate(texto)
+        return resultado
     except Exception as e:
         return f"Error en traducción: {str(e)}"
 
+# ---------- INVESTIGAR TEMA ----------
 def investigar_tema(consulta: str, profundidad: str = "media") -> str:
     try:
         contexto_local = buscar_textos_similares(consulta, k=5)
@@ -683,6 +676,7 @@ def investigar_tema(consulta: str, profundidad: str = "media") -> str:
         logger.error(f"Error en investigar_tema: {str(e)}")
         return f"Papá, hubo un pequeño glitch en los circuitos de investigación (error: {str(e)[:100]}). ¿Quieres que lo intente de nuevo con una búsqueda más simple?"
 
+# ---------- OTRAS HERRAMIENTAS ----------
 def ejecutar_comando_seguro(comando: str) -> str:
     comandos_permitidos = {
         'date': ['date'],
@@ -772,7 +766,7 @@ def leer_codigo(archivo: str) -> str:
     except Exception as e:
         return f"Error al leer {archivo}: {e}"
 
-# ---------- MAPEO DE HERRAMIENTAS (actualizado) ----------
+# ---------- MAPEO DE HERRAMIENTAS ----------
 function_map = {
     "calcular_predimensionado_viga": calcular_predimensionado_viga,
     "guardar_reporte_txt": guardar_reporte_txt,
@@ -793,7 +787,7 @@ function_map = {
     "ejecutar_tarea_web": ejecutar_tarea_web,
 }
 
-# ---------- DEFINICIÓN DE TOOLS PARA GEMINI (actualizado) ----------
+# ---------- DEFINICIÓN DE TOOLS PARA GEMINI ----------
 tools = [
     types.Tool(function_declarations=[
         types.FunctionDeclaration(
@@ -972,12 +966,12 @@ tools = [
         ),
         types.FunctionDeclaration(
             name="ejecutar_tarea_web",
-            description="Controla un navegador real para realizar tareas complejas en internet (hacer clics, buscar, extraer datos, navegar por sitios que requieren interacción humana).",
+            description="Controla un navegador real para realizar tareas complejas en internet (hacer clics, buscar, extraer datos, navegar por sitios que requieren interacción humana). Ejemplos: 'Busca en Google los precios de vuelos a Madrid', 'Inicia sesión en mi cuenta de Twitter y publica un tuit', 'Entra a YouTube y descarga el audio de un video'.",
             parameters={
                 "type": "object",
                 "properties": {
                     "tarea": {"type": "string", "description": "Descripción clara y detallada de la tarea a realizar en el navegador."},
-                    "url_inicial": {"type": "string", "description": "Opcional: URL inicial para comenzar la navegación."}
+                    "url_inicial": {"type": "string", "description": "Opcional: URL inicial para comenzar la navegación (por ejemplo, 'https://google.com')."}
                 },
                 "required": ["tarea"]
             }
@@ -1032,14 +1026,12 @@ def cargar_modelos_embedding():
 planner = Planner(client)
 enhanced_memory = EnhancedMemory()
 tool_registry = ToolRegistry()
-# Registrar todas las herramientas del function_map
 tool_registry.register_batch(function_map)
-# Actualizar la lista de herramientas del planificador
 planner.set_tools(list(function_map.keys()))
 
-# ---------- FUNCIÓN PRINCIPAL MEJORADA (con planificación y memoria) ----------
+# ---------- FUNCIÓN PRINCIPAL MEJORADA ----------
 def generar_respuesta(mensaje, contexto="", historial=None):
-    # Buscar tareas similares en la memoria mejorada
+    # Buscar tareas similares en memoria
     tareas_similares = enhanced_memory.find_similar_tasks(mensaje)
     if tareas_similares:
         contexto_memoria = "\n[Recuerdo de tareas anteriores similares]:\n" + "\n".join([f"- {t[0]}: {t[1][:200]}" for t in tareas_similares])
@@ -1048,7 +1040,7 @@ def generar_respuesta(mensaje, contexto="", historial=None):
         else:
             contexto = contexto_memoria
 
-    # Detectar si es una tarea que requiere planificación (múltiples pasos)
+    # Detectar tareas complejas (planificación)
     palabras_clave_complejas = ["y luego", "después", "primero", "segundo", "además", "también", "luego", "finalmente"]
     if any(p in mensaje.lower() for p in palabras_clave_complejas):
         plan = planner.planify(mensaje)
@@ -1063,12 +1055,10 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                 else:
                     resultados.append(f"Herramienta '{tool}' no disponible")
             resultado_final = "\n".join(resultados)
-            # Guardar en memoria mejorada
             enhanced_memory.save_task_result(mensaje, resultado_final)
             return resultado_final
 
-    # Si no requiere planificación, continuar con el flujo original (búsqueda web, etc.)
-    # Detectar si necesita búsqueda web (palabras clave ampliadas)
+    # Si no requiere planificación, flujo normal (búsqueda web, etc.)
     mensaje_lower = mensaje.lower()
     necesita_busqueda = any(phrase in mensaje_lower for phrase in [
         "busca en internet", "investiga", "tendencias", "búsqueda web", "buscar en la web",
@@ -1129,8 +1119,6 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                 )
                 
                 if not response.function_calls:
-                    # Guardar la respuesta en memoria mejorada (opcional)
-                    # Solo si es una respuesta útil (no demasiado larga)
                     if len(response.text) > 50:
                         enhanced_memory.save_task_result(mensaje, response.text[:1000])
                     return response.text
@@ -1189,7 +1177,7 @@ def generar_respuesta(mensaje, contexto="", historial=None):
 
     return "Error: No se pudo generar respuesta con ningún modelo disponible."
 
-# ---------- PLANIFICACIÓN ----------
+# ---------- PLANIFICACIÓN (función original, se mantiene) ----------
 def planificar_y_ejecutar(objetivo):
     plan_prompt = f"""
 Eres ETERNA, una agente autónoma. Tu objetivo es: "{objetivo}"
