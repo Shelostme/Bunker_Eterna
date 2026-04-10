@@ -21,6 +21,7 @@ import logging
 from urllib.parse import quote_plus
 import asyncio
 import nest_asyncio
+import base64
 
 # Configurar logging
 logger = logging.getLogger(__name__)
@@ -766,7 +767,71 @@ def leer_codigo(archivo: str) -> str:
     except Exception as e:
         return f"Error al leer {archivo}: {e}"
 
-# ---------- MAPEO DE HERRAMIENTAS ----------
+# ========== NUEVAS FUNCIONES: GENERACIÓN Y ANÁLISIS DE IMÁGENES ==========
+
+def generar_imagen(descripcion: str) -> str:
+    """
+    Genera una imagen a partir de una descripción textual usando Gemini 2.0 Flash.
+    Retorna la ruta del archivo guardado.
+    """
+    try:
+        model = "gemini-2.0-flash-exp"  # Modelo experimental con generación de imágenes
+        config = types.GenerateContentConfig(
+            response_modalities=['IMAGE'],
+            temperature=0.7,
+        )
+        response = client.models.generate_content(
+            model=model,
+            config=config,
+            contents=[types.Content(role="user", parts=[types.Part(text=descripcion)])]
+        )
+        # Buscar la imagen generada
+        for part in response.candidates[0].content.parts:
+            if part.inline_data and part.inline_data.mime_type.startswith('image/'):
+                image_data = part.inline_data.data
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"imagen_generada_{timestamp}.png"
+                with open(filename, "wb") as f:
+                    f.write(image_data)
+                return f"✅ Imagen generada y guardada como: {filename}\nDescripción: {descripcion}"
+        return "⚠️ No se pudo generar la imagen. Intenta con otra descripción."
+    except Exception as e:
+        logger.error(f"Error en generar_imagen: {e}")
+        return f"❌ Error generando imagen: {str(e)}"
+
+def analizar_imagen(imagen_path: str, pregunta: str) -> str:
+    """
+    Recibe una ruta de imagen local y una pregunta, y devuelve la respuesta de Gemini.
+    """
+    if not os.path.exists(imagen_path):
+        return f"❌ No se encontró la imagen: {imagen_path}"
+    try:
+        with open(imagen_path, "rb") as f:
+            image_bytes = f.read()
+        image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+        mime_type = "image/png" if imagen_path.endswith('.png') else "image/jpeg"
+        model = "gemini-1.5-flash"  # Soporta visión
+        response = client.models.generate_content(
+            model=model,
+            config=types.GenerateContentConfig(temperature=0.5),
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part(text=pregunta),
+                        types.Part(inline_data=types.Blob(mime_type=mime_type, data=image_b64))
+                    ]
+                )
+            ]
+        )
+        return response.text
+    except Exception as e:
+        logger.error(f"Error en analizar_imagen: {e}")
+        return f"❌ Error analizando imagen: {str(e)}"
+
+# ========== FIN DE NUEVAS FUNCIONES ==========
+
+# ---------- MAPEO DE HERRAMIENTAS (ACTUALIZADO) ----------
 function_map = {
     "calcular_predimensionado_viga": calcular_predimensionado_viga,
     "guardar_reporte_txt": guardar_reporte_txt,
@@ -785,9 +850,11 @@ function_map = {
     "obtener_cotizacion": obtener_cotizacion,
     "traducir_texto": traducir_texto,
     "ejecutar_tarea_web": ejecutar_tarea_web,
+    "generar_imagen": generar_imagen,
+    "analizar_imagen": analizar_imagen,
 }
 
-# ---------- DEFINICIÓN DE TOOLS PARA GEMINI ----------
+# ---------- DEFINICIÓN DE TOOLS PARA GEMINI (ACTUALIZADO) ----------
 tools = [
     types.Tool(function_declarations=[
         types.FunctionDeclaration(
@@ -966,7 +1033,7 @@ tools = [
         ),
         types.FunctionDeclaration(
             name="ejecutar_tarea_web",
-            description="Controla un navegador real para realizar tareas complejas en internet (hacer clics, buscar, extraer datos, navegar por sitios que requieren interacción humana). Ejemplos: 'Busca en Google los precios de vuelos a Madrid', 'Inicia sesión en mi cuenta de Twitter y publica un tuit', 'Entra a YouTube y descarga el audio de un video'.",
+            description="Controla un navegador real para realizar tareas complejas en internet (hacer clics, buscar, extraer datos, navegar por sitios que requieren interacción humana).",
             parameters={
                 "type": "object",
                 "properties": {
@@ -974,6 +1041,30 @@ tools = [
                     "url_inicial": {"type": "string", "description": "Opcional: URL inicial para comenzar la navegación (por ejemplo, 'https://google.com')."}
                 },
                 "required": ["tarea"]
+            }
+        ),
+        # NUEVAS HERRAMIENTAS: GENERAR Y ANALIZAR IMÁGENES
+        types.FunctionDeclaration(
+            name="generar_imagen",
+            description="Genera una imagen a partir de una descripción textual. Útil para crear esquemas de vigas, diagramas estructurales, planos conceptuales, etc.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "descripcion": {"type": "string", "description": "Descripción detallada de la imagen a generar (ej. 'Diagrama de una viga de concreto armado de 5 metros con carga puntual en el centro')."}
+                },
+                "required": ["descripcion"]
+            }
+        ),
+        types.FunctionDeclaration(
+            name="analizar_imagen",
+            description="Recibe una imagen (ruta de archivo) y una pregunta, y devuelve un análisis basado en visión por computadora. Útil para examinar fotos de estructuras, planos escaneados, etc.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "imagen_path": {"type": "string", "description": "Ruta del archivo de imagen (ej. '/workspaces/Bunker_Eterna/plano.jpg')."},
+                    "pregunta": {"type": "string", "description": "Pregunta sobre la imagen (ej. '¿Qué dimensiones tiene esta viga?', 'Describe la estructura que ves')."}
+                },
+                "required": ["imagen_path", "pregunta"]
             }
         ),
     ])
@@ -1196,6 +1287,8 @@ Descompón este objetivo en una secuencia de pasos. Cada paso debe ser una acci�
 - obtener_cotizacion(accion)
 - traducir_texto(texto, idioma_destino)
 - ejecutar_tarea_web(tarea, url_inicial)
+- generar_imagen(descripcion)
+- analizar_imagen(imagen_path, pregunta)
 
 Devuelve los pasos en formato JSON, así:
 [
@@ -1302,6 +1395,9 @@ iniciar_agente()
 # ---------- PUNTO DE ENTRADA PARA PRUEBAS ----------
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    print("Eterna Core EVOLUCIONADO con planificación y memoria mejorada. Probando...")
+    print("Eterna Core EVOLUCIONADO con generación y análisis de imágenes. Probando...")
+    # Prueba de generación de imagen (opcional)
+    # respuesta = generar_imagen("Diagrama de una viga de acero de 4 metros")
+    # print(respuesta)
     respuesta = generar_respuesta("Primero busca en internet las tendencias de repostería 2026, luego guarda los resultados en un reporte llamado 'tendencias'")
     print(respuesta)
