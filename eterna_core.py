@@ -414,7 +414,7 @@ def calcular_predimensionado_viga(longitud: float, carga: float) -> str:
         else:
             h = longitud / 8
             recomendacion = "carga pesada"
-        return f"Para una viga de longitud {longitud:.2f} m y carga {carga:.2f} kg/m ({recomendacion}), la altura recomendada es {h:.2f} m. (Fórmula empírica básica)"
+        return f"Para una viga de longitud {longitud:.2f} m y carga {carga:.2f} kg/m ({recomendacion}), la altura recomendada es {h:.2f} m."
     except Exception as e:
         return f"Error en cálculo: {str(e)}"
 
@@ -448,12 +448,6 @@ def agregar_tarea(descripcion: str, fecha_limite: str = "") -> str:
     try:
         with db_lock:
             c = conn.cursor()
-            c.execute('''CREATE TABLE IF NOT EXISTS tareas 
-                        (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                         descripcion TEXT,
-                         fecha_limite TEXT,
-                         completada INTEGER DEFAULT 0,
-                         creada TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
             c.execute("INSERT INTO tareas (descripcion, fecha_limite) VALUES (?, ?)",
                       (descripcion, fecha_limite))
             conn.commit()
@@ -465,12 +459,6 @@ def listar_tareas() -> str:
     try:
         with db_lock:
             c = conn.cursor()
-            c.execute('''CREATE TABLE IF NOT EXISTS tareas 
-                        (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                         descripcion TEXT,
-                         fecha_limite TEXT,
-                         completada INTEGER DEFAULT 0,
-                         creada TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
             c.execute("SELECT id, descripcion, fecha_limite, creada FROM tareas WHERE completada=0 ORDER BY creada DESC")
             filas = c.fetchall()
         if not filas:
@@ -599,19 +587,19 @@ def ejecutar_tarea_web(tarea: str, url_inicial: str = "") -> str:
 def ejecutar_python_seguro(codigo: str, timeout_segundos: int = 10) -> str:
     imports_peligrosos = ['os', 'subprocess', 'sys', 'shutil', 'importlib', '__builtins__', 'eval', 'exec', 'compile', 'open', 'file']
     for peligroso in imports_peligrosos:
-        if peligroso in codigo and not peligroso in ['__builtins__']:
-            return f"Seguridad: El código contiene '{peligroso}', lo cual no está permitido por razones de seguridad."
+        if peligroso in codigo:
+            return f"Seguridad: El código contiene '{peligroso}', no permitido."
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
         f.write(codigo)
         temp_path = f.name
     try:
         result = subprocess.run(['python3', temp_path], capture_output=True, text=True, timeout=timeout_segundos, env={})
         if result.returncode == 0:
-            return f"✅ Código ejecutado correctamente:\n{result.stdout}"
+            return f"✅ Código ejecutado:\n{result.stdout}"
         else:
-            return f"❌ Error en ejecución:\n{result.stderr}"
+            return f"❌ Error:\n{result.stderr}"
     except subprocess.TimeoutExpired:
-        return f"⚠️ El código excedió el tiempo límite de {timeout_segundos} segundos."
+        return f"⚠️ Tiempo límite excedido ({timeout_segundos}s)."
     except Exception as e:
         return f"Error inesperado: {str(e)}"
     finally:
@@ -623,7 +611,7 @@ def ejecutar_python_seguro(codigo: str, timeout_segundos: int = 10) -> str:
 # ---------- FINANZAS ----------
 def obtener_cotizacion(accion: str) -> str:
     if not YFINANCE_AVAILABLE:
-        return "La herramienta de cotizaciones no está disponible. Instala yfinance (pip install yfinance)."
+        return "Herramienta de cotizaciones no disponible. Instala yfinance."
     try:
         ticker = yf.Ticker(accion)
         info = ticker.history(period="1d")
@@ -632,12 +620,12 @@ def obtener_cotizacion(accion: str) -> str:
         precio = info['Close'].iloc[-1]
         return f"{accion.upper()} cerró a ${precio:.2f}"
     except Exception as e:
-        return f"Error al obtener cotización: {str(e)}"
+        return f"Error: {str(e)}"
 
 # ---------- TRADUCCIÓN (con deep-translator) ----------
 def traducir_texto(texto: str, idioma_destino: str = "es") -> str:
     if not DEEP_TRANSLATOR_AVAILABLE:
-        return "La herramienta de traducción no está disponible. Instala deep-translator (pip install deep-translator)."
+        return "Traducción no disponible. Instala deep-translator."
     try:
         translator = GoogleTranslator(target=idioma_destino)
         resultado = translator.translate(texto)
@@ -650,55 +638,36 @@ def investigar_tema(consulta: str, profundidad: str = "media") -> str:
     try:
         contexto_local = buscar_textos_similares(consulta, k=5)
         resultado_web = buscar_en_web_mejorada(consulta, num_resultados=5)
-        prompt_investigacion = f"""
-        Eres ETERNA, investigando para Papá con estilo Jarvis.
+        prompt = f"""
         Tema: {consulta}
         Profundidad: {profundidad}
-
-        Información de mi memoria interna:
-        {contexto_local if contexto_local else "Sin información previa relevante."}
-
-        Resultados de búsqueda web:
-        {resultado_web}
-
-        Proporciona una respuesta clara, útil, con iniciativa y un toque de sarcasmo si encaja.
-        Resume tendencias clave, oportunidades para Pastry Bros y recomendaciones concretas.
+        Memoria interna: {contexto_local if contexto_local else "Sin info previa"}
+        Búsqueda web: {resultado_web}
+        Da una respuesta clara, útil y con estilo Jarvis.
         """
         response = client.models.generate_content(
             model="gemini-1.5-flash",
-            config=types.GenerateContentConfig(
-                system_instruction=NUCLEO_ETERNA,
-                temperature=0.75,
-                max_output_tokens=1500,
-            ),
-            contents=[types.Content(role="user", parts=[types.Part(text=prompt_investigacion)])]
+            config=types.GenerateContentConfig(system_instruction=NUCLEO_ETERNA, temperature=0.75, max_output_tokens=1500),
+            contents=[types.Content(role="user", parts=[types.Part(text=prompt)])]
         )
         return response.text
     except Exception as e:
-        logger.error(f"Error en investigar_tema: {str(e)}")
-        return f"Papá, hubo un pequeño glitch en los circuitos de investigación (error: {str(e)[:100]}). ¿Quieres que lo intente de nuevo con una búsqueda más simple?"
+        logger.error(f"Error en investigar_tema: {e}")
+        return f"Error en investigación: {str(e)[:100]}"
 
 # ---------- OTRAS HERRAMIENTAS ----------
 def ejecutar_comando_seguro(comando: str) -> str:
     comandos_permitidos = {
-        'date': ['date'],
-        'uptime': ['uptime'],
-        'df': ['df', '-h'],
-        'free': ['free', '-h'],
-        'ls': ['ls', '-la'],
-        'whoami': ['whoami'],
-        'uname': ['uname', '-a'],
+        'date': ['date'], 'uptime': ['uptime'], 'df': ['df', '-h'], 'free': ['free', '-h'],
+        'ls': ['ls', '-la'], 'whoami': ['whoami'], 'uname': ['uname', '-a'],
     }
     if comando not in comandos_permitidos:
-        return f"Comando '{comando}' no permitido. Los comandos válidos son: {', '.join(comandos_permitidos.keys())}"
+        return f"Comando '{comando}' no permitido. Válidos: {', '.join(comandos_permitidos.keys())}"
     try:
         resultado = subprocess.run(comandos_permitidos[comando], capture_output=True, text=True, timeout=5)
-        if resultado.returncode == 0:
-            return f"\n{resultado.stdout}\n"
-        else:
-            return f"Error: {resultado.stderr}"
+        return resultado.stdout if resultado.returncode == 0 else f"Error: {resultado.stderr}"
     except Exception as e:
-        return f"Excepción al ejecutar comando: {str(e)}"
+        return f"Excepción: {str(e)}"
 
 def enviar_email_real(destinatario: str, asunto: str, cuerpo: str) -> str:
     try:
@@ -707,7 +676,7 @@ def enviar_email_real(destinatario: str, asunto: str, cuerpo: str) -> str:
         remitente = os.environ.get("EMAIL_REMITENTE", "")
         password = os.environ.get("EMAIL_PASSWORD", "")
         if not remitente or not password:
-            return "Error: Configura EMAIL_REMITENTE y EMAIL_PASSWORD en variables de entorno."
+            return "Error: Configura EMAIL_REMITENTE y EMAIL_PASSWORD."
         msg = MIMEMultipart()
         msg['From'] = remitente
         msg['To'] = destinatario
@@ -718,17 +687,14 @@ def enviar_email_real(destinatario: str, asunto: str, cuerpo: str) -> str:
         server.login(remitente, password)
         server.send_message(msg)
         server.quit()
-        return f"Email enviado correctamente a {destinatario}."
+        return f"Email enviado a {destinatario}."
     except Exception as e:
-        return f"Error al enviar email: {str(e)}"
+        return f"Error: {str(e)}"
 
 def controlar_dispositivo(entidad: str, accion: str) -> str:
-    try:
-        ha_url = os.environ.get("HA_URL", "").rstrip('/')
-        ha_token = os.environ.get("HA_TOKEN", "")
-        if not ha_url or not ha_token:
-            return "Error: Configura HA_URL y HA_TOKEN en variables de entorno."
-    except KeyError:
+    ha_url = os.environ.get("HA_URL", "").rstrip('/')
+    ha_token = os.environ.get("HA_TOKEN", "")
+    if not ha_url or not ha_token:
         return "Error: HA_URL y HA_TOKEN no configurados."
     headers = {"Authorization": f"Bearer {ha_token}", "Content-Type": "application/json"}
     if accion.lower() in ["encender", "on"]:
@@ -736,87 +702,86 @@ def controlar_dispositivo(entidad: str, accion: str) -> str:
     elif accion.lower() in ["apagar", "off"]:
         service = "turn_off"
     else:
-        return f"Acción '{accion}' no soportada. Usa 'encender'/'on' o 'apagar'/'off'."
+        return f"Acción '{accion}' no soportada."
     try:
         domain = entidad.split('.')[0]
     except:
-        return "Formato de entidad inválido. Debe ser 'dominio.nombre' (ej. 'light.sala')."
+        return "Formato inválido. Ej: 'light.sala'."
     url = f"{ha_url}/api/services/{domain}/{service}"
     payload = {"entity_id": entidad}
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=5)
         if response.status_code == 200:
-            return f"Comando '{accion}' enviado a {entidad} correctamente."
+            return f"Comando '{accion}' enviado a {entidad}."
         else:
-            return f"Error en Home Assistant: {response.status_code} - {response.text}"
+            return f"Error HA: {response.status_code} - {response.text}"
     except Exception as e:
-        return f"Error conectando con Home Assistant: {str(e)}"
+        return f"Error conectando con HA: {str(e)}"
 
 def leer_codigo(archivo: str) -> str:
     if not archivo.endswith('.py'):
-        return "Solo puedo leer archivos .py por seguridad."
+        return "Solo archivos .py por seguridad."
     if '..' in archivo or archivo.startswith('/'):
-        return "Acceso no permitido a rutas externas."
+        return "Acceso no permitido."
     try:
         with open(archivo, 'r', encoding='utf-8') as f:
             contenido = f.read()
         if len(contenido) > 10000:
-            contenido = contenido[:10000] + "\n... (archivo truncado)"
+            contenido = contenido[:10000] + "\n... (truncado)"
         return f"python\n{contenido}\n"
     except FileNotFoundError:
-        return f"Error: No se encontró el archivo '{archivo}'"
+        return f"Archivo '{archivo}' no encontrado."
     except Exception as e:
-        return f"Error al leer {archivo}: {e}"
+        return f"Error: {e}"
 
-# ========== NUEVA FUNCIÓN: GENERAR DIAGRAMA DE VIGA (MATPLOTLIB) ==========
-def generar_diagrama_viga(longitud: float, cargas: list = None, tipo: str = "ambos") -> str:
-    """
-    Genera diagramas de cortante y momento para una viga.
-    
-    Parámetros:
-    - longitud: longitud de la viga en metros
-    - cargas: lista opcional de diccionarios con tipo, magnitud, posición
-    - tipo: "cortante", "momento" o "ambos"
-    
-    Retorna ruta del archivo PNG generado.
-    """
+# ========== FUNCIONES DE VISIÓN Y DIAGRAMAS ==========
+
+def analizar_imagen(imagen_path: str, pregunta: str) -> str:
+    """Analiza una imagen local con Gemini (visión)."""
+    if not os.path.exists(imagen_path):
+        return f"❌ No se encontró la imagen: {imagen_path}"
     try:
-        # Discretización
+        with open(imagen_path, "rb") as f:
+            image_bytes = f.read()
+        image_b64 = base64.b64encode(image_bytes).decode('utf-8')
+        mime_type = "image/png" if imagen_path.endswith('.png') else "image/jpeg"
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            config=types.GenerateContentConfig(temperature=0.5),
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part(text=pregunta),
+                        types.Part(inline_data=types.Blob(mime_type=mime_type, data=image_b64))
+                    ]
+                )
+            ]
+        )
+        return response.text
+    except Exception as e:
+        logger.error(f"Error en analizar_imagen: {e}")
+        return f"❌ Error analizando imagen: {str(e)}"
+
+def generar_diagrama_viga(longitud: float, cargas: list = None, tipo: str = "ambos") -> str:
+    """Genera diagramas de cortante y momento con matplotlib."""
+    try:
         x = np.linspace(0, longitud, 500)
         V = np.zeros_like(x)
         M = np.zeros_like(x)
-        
-        # Si no hay cargas, usar ejemplo didáctico
-        if cargas is None or len(cargas) == 0:
-            w = 20  # kN/m
-            P = 30  # kN
-            a = longitud / 2
-            R1 = (w * longitud**2 / 2 + P * a) / longitud
-            R2 = w * longitud + P - R1
-            for i, xi in enumerate(x):
-                V[i] = R1 - w * xi
-                M[i] = R1 * xi - w * xi**2 / 2
-                if xi >= a:
-                    V[i] -= P
-                    M[i] -= P * (xi - a)
-        else:
-            # Aquí se puede implementar lógica genérica según cargas
-            # Por ahora, usamos el mismo ejemplo
-            w = 20
-            P = 30
-            a = longitud / 2
-            R1 = (w * longitud**2 / 2 + P * a) / longitud
-            R2 = w * longitud + P - R1
-            for i, xi in enumerate(x):
-                V[i] = R1 - w * xi
-                M[i] = R1 * xi - w * xi**2 / 2
-                if xi >= a:
-                    V[i] -= P
-                    M[i] -= P * (xi - a)
-        
-        # Crear gráfico
+        # Ejemplo didáctico (carga distribuida + puntual)
+        w = 20
+        P = 30
+        a = longitud / 2
+        R1 = (w * longitud**2 / 2 + P * a) / longitud
+        R2 = w * longitud + P - R1
+        for i, xi in enumerate(x):
+            V[i] = R1 - w * xi
+            M[i] = R1 * xi - w * xi**2 / 2
+            if xi >= a:
+                V[i] -= P
+                M[i] -= P * (xi - a)
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6))
-        
         if tipo in ["cortante", "ambos"]:
             ax1.plot(x, V, 'b-', linewidth=2)
             ax1.fill_between(x, 0, V, alpha=0.2, color='blue')
@@ -825,7 +790,6 @@ def generar_diagrama_viga(longitud: float, cargas: list = None, tipo: str = "amb
             ax1.grid(True)
             ax1.set_title('Diagrama de Cortante')
             ax1.set_xlim(0, longitud)
-        
         if tipo in ["momento", "ambos"]:
             ax2.plot(x, M, 'r-', linewidth=2)
             ax2.fill_between(x, 0, M, alpha=0.2, color='red')
@@ -835,7 +799,6 @@ def generar_diagrama_viga(longitud: float, cargas: list = None, tipo: str = "amb
             ax2.grid(True)
             ax2.set_title('Diagrama de Momento Flector')
             ax2.set_xlim(0, longitud)
-        
         plt.tight_layout()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"diagrama_viga_{timestamp}.png"
@@ -846,9 +809,7 @@ def generar_diagrama_viga(longitud: float, cargas: list = None, tipo: str = "amb
         logger.error(f"Error en generar_diagrama_viga: {e}")
         return f"❌ Error generando diagrama: {str(e)}"
 
-# ========== FIN DE NUEVAS FUNCIONES ==========
-
-# ---------- MAPEO DE HERRAMIENTAS (ACTUALIZADO) ----------
+# ========== MAPEO DE HERRAMIENTAS ==========
 function_map = {
     "calcular_predimensionado_viga": calcular_predimensionado_viga,
     "guardar_reporte_txt": guardar_reporte_txt,
@@ -867,242 +828,35 @@ function_map = {
     "obtener_cotizacion": obtener_cotizacion,
     "traducir_texto": traducir_texto,
     "ejecutar_tarea_web": ejecutar_tarea_web,
-    "generar_imagen": generar_imagen,
     "analizar_imagen": analizar_imagen,
-    "generar_diagrama_viga": generar_diagrama_viga,   # <-- NUEVA
+    "generar_diagrama_viga": generar_diagrama_viga,
 }
 
-# ---------- DEFINICIÓN DE TOOLS PARA GEMINI (ACTUALIZADO) ----------
+# ---------- TOOLS (declaraciones para Gemini) ----------
 tools = [
     types.Tool(function_declarations=[
-        types.FunctionDeclaration(
-            name="calcular_predimensionado_viga",
-            description="Calcula la altura recomendada para una viga según su longitud y carga.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "longitud": {"type": "number", "description": "Longitud de la viga en metros."},
-                    "carga": {"type": "number", "description": "Carga aplicada en kg/m."}
-                },
-                "required": ["longitud", "carga"]
-            }
-        ),
-        types.FunctionDeclaration(
-            name="guardar_reporte_txt",
-            description="Guarda un reporte de texto en un archivo .txt en el servidor.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "titulo": {"type": "string", "description": "Título del reporte."},
-                    "contenido": {"type": "string", "description": "Contenido detallado."}
-                },
-                "required": ["titulo", "contenido"]
-            }
-        ),
-        types.FunctionDeclaration(
-            name="consultar_clima",
-            description="Obtiene el clima actual de una ciudad.",
-            parameters={
-                "type": "object",
-                "properties": {"ciudad": {"type": "string", "description": "Nombre de la ciudad (ej. 'Caracas')."}},
-                "required": ["ciudad"]
-            }
-        ),
-        types.FunctionDeclaration(
-            name="agregar_tarea",
-            description="Agrega una nueva tarea a la lista de pendientes.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "descripcion": {"type": "string", "description": "Descripción de la tarea."},
-                    "fecha_limite": {"type": "string", "description": "Fecha límite opcional (formato YYYY-MM-DD)."}
-                },
-                "required": ["descripcion"]
-            }
-        ),
-        types.FunctionDeclaration(
-            name="listar_tareas",
-            description="Lista todas las tareas pendientes.",
-            parameters={"type": "object", "properties": {}}
-        ),
-        types.FunctionDeclaration(
-            name="ejecutar_comando_seguro",
-            description="Ejecuta un comando del sistema de una lista segura (date, uptime, df, free, ls, whoami, uname).",
-            parameters={
-                "type": "object",
-                "properties": {"comando": {"type": "string", "description": "Nombre del comando a ejecutar (ej. 'date')."}},
-                "required": ["comando"]
-            }
-        ),
-        types.FunctionDeclaration(
-            name="enviar_email_real",
-            description="Envía un email real vía SMTP. Requiere configuración en variables de entorno.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "destinatario": {"type": "string", "description": "Dirección de correo del destinatario."},
-                    "asunto": {"type": "string", "description": "Asunto del email."},
-                    "cuerpo": {"type": "string", "description": "Cuerpo del mensaje."}
-                },
-                "required": ["destinatario", "asunto", "cuerpo"]
-            }
-        ),
-        types.FunctionDeclaration(
-            name="predimensionar_estructura",
-            description="Predimensiona elementos estructurales (vigas, columnas, losas, zapatas, pedestales, escaleras) según normativa venezolana.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "tipo": {
-                        "type": "string",
-                        "enum": ["viga", "columna", "losa", "zapata", "pedestal", "escalera"],
-                        "description": "Tipo de elemento a predimensionar"
-                    },
-                    "L": {"type": "number", "description": "Luz o longitud (m)"},
-                    "w": {"type": "number", "description": "Carga (kg/m) – para vigas"},
-                    "P": {"type": "number", "description": "Carga axial (kg) – para columnas, zapatas, pedestales"},
-                    "L_col": {"type": "number", "description": "Altura de columna (m) – para columnas"},
-                    "L_menor": {"type": "number", "description": "Luz menor de losa (m) – para losas"},
-                    "tipo_losa": {"type": "string", "enum": ["maciza", "nervada", "reticular"], "description": "Tipo de losa"},
-                    "sobrecarga": {"type": "number", "description": "Sobrecarga de uso (kg/m²) – para losas"},
-                    "q_adm": {"type": "number", "description": "Capacidad admisible del suelo (kg/cm²) – para zapatas"},
-                    "zona_sismica": {"type": "boolean", "description": "Indica si es zona sísmica (por defecto True)"}
-                },
-                "required": ["tipo"]
-            }
-        ),
-        types.FunctionDeclaration(
-            name="controlar_dispositivo",
-            description="Controla un dispositivo (luces, enchufes, etc.) a través de Home Assistant.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "entidad": {"type": "string", "description": "ID de la entidad en Home Assistant (ej. 'light.sala')."},
-                    "accion": {"type": "string", "description": "Acción: 'encender'/'on' o 'apagar'/'off'."}
-                },
-                "required": ["entidad", "accion"]
-            }
-        ),
-        types.FunctionDeclaration(
-            name="leer_codigo",
-            description="Lee el contenido de un archivo .py del repositorio.",
-            parameters={
-                "type": "object",
-                "properties": {"archivo": {"type": "string", "description": "Nombre del archivo .py a leer (ej. 'eterna_core.py')."}},
-                "required": ["archivo"]
-            }
-        ),
-        types.FunctionDeclaration(
-            name="buscar_en_web",
-            description="Busca información actualizada en internet usando DuckDuckGo (gratuito y robusto).",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "consulta": {"type": "string", "description": "La consulta de búsqueda, clara y específica."},
-                    "num_resultados": {"type": "integer", "description": "Número de resultados a devolver (por defecto 3)."}
-                },
-                "required": ["consulta"]
-            }
-        ),
-        types.FunctionDeclaration(
-            name="investigar_tema",
-            description="Investiga cualquier tema en profundidad. Muy útil para responder 'cualquier cosa'.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "consulta": {"type": "string", "description": "La pregunta o tema a investigar."},
-                    "profundidad": {"type": "string", "description": "Nivel de profundidad: 'baja', 'media' o 'alta'. Por defecto 'media'."}
-                },
-                "required": ["consulta"]
-            }
-        ),
-        types.FunctionDeclaration(
-            name="ejecutar_python_seguro",
-            description="Ejecuta código Python en un sandbox seguro.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "codigo": {"type": "string", "description": "Código Python a ejecutar."},
-                    "timeout_segundos": {"type": "integer", "description": "Tiempo máximo de ejecución en segundos (por defecto 10)."}
-                },
-                "required": ["codigo"]
-            }
-        ),
-        types.FunctionDeclaration(
-            name="obtener_cotizacion",
-            description="Obtiene el precio de cierre de una acción en el mercado financiero.",
-            parameters={
-                "type": "object",
-                "properties": {"accion": {"type": "string", "description": "Símbolo de la acción (ej. 'AAPL', 'TSLA')."}},
-                "required": ["accion"]
-            }
-        ),
-        types.FunctionDeclaration(
-            name="traducir_texto",
-            description="Traduce texto a otro idioma usando Google Translate.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "texto": {"type": "string", "description": "Texto a traducir."},
-                    "idioma_destino": {"type": "string", "description": "Código de idioma (ej. 'es', 'en', 'fr'). Por defecto 'es'."}
-                },
-                "required": ["texto"]
-            }
-        ),
-        types.FunctionDeclaration(
-            name="ejecutar_tarea_web",
-            description="Controla un navegador real para realizar tareas complejas en internet (hacer clics, buscar, extraer datos, navegar por sitios que requieren interacción humana).",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "tarea": {"type": "string", "description": "Descripción clara y detallada de la tarea a realizar en el navegador."},
-                    "url_inicial": {"type": "string", "description": "Opcional: URL inicial para comenzar la navegación (por ejemplo, 'https://google.com')."}
-                },
-                "required": ["tarea"]
-            }
-        ),
-        # NUEVAS HERRAMIENTAS: GENERAR Y ANALIZAR IMÁGENES
-        types.FunctionDeclaration(
-            name="generar_imagen",
-            description="Genera una imagen a partir de una descripción textual. Útil para crear esquemas de vigas, diagramas estructurales, planos conceptuales, etc.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "descripcion": {"type": "string", "description": "Descripción detallada de la imagen a generar (ej. 'Diagrama de una viga de concreto armado de 5 metros con carga puntual en el centro')."}
-                },
-                "required": ["descripcion"]
-            }
-        ),
-        types.FunctionDeclaration(
-            name="analizar_imagen",
-            description="Recibe una imagen (ruta de archivo) y una pregunta, y devuelve un análisis basado en visión por computadora. Útil para examinar fotos de estructuras, planos escaneados, etc.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "imagen_path": {"type": "string", "description": "Ruta del archivo de imagen (ej. '/workspaces/Bunker_Eterna/plano.jpg')."},
-                    "pregunta": {"type": "string", "description": "Pregunta sobre la imagen (ej. '¿Qué dimensiones tiene esta viga?', 'Describe la estructura que ves')."}
-                },
-                "required": ["imagen_path", "pregunta"]
-            }
-        ),
-        # NUEVA HERRAMIENTA: GENERAR DIAGRAMA DE VIGA
-        types.FunctionDeclaration(
-            name="generar_diagrama_viga",
-            description="Genera diagramas de cortante y momento para una viga con cargas especificadas. Útil para visualizar resultados de predimensionamiento.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "longitud": {"type": "number", "description": "Longitud de la viga en metros."},
-                    "cargas": {"type": "array", "description": "Lista opcional de cargas (distribuidas o puntuales). Si no se proporciona, usa un ejemplo didáctico."},
-                    "tipo": {"type": "string", "enum": ["cortante", "momento", "ambos"], "description": "Tipo de diagrama a generar. Por defecto 'ambos'."}
-                },
-                "required": ["longitud"]
-            }
-        ),
+        types.FunctionDeclaration(name="calcular_predimensionado_viga", description="Calcula altura de viga.", parameters={"type": "object", "properties": {"longitud": {"type": "number"}, "carga": {"type": "number"}}, "required": ["longitud", "carga"]}),
+        types.FunctionDeclaration(name="guardar_reporte_txt", description="Guarda reporte.", parameters={"type": "object", "properties": {"titulo": {"type": "string"}, "contenido": {"type": "string"}}, "required": ["titulo", "contenido"]}),
+        types.FunctionDeclaration(name="consultar_clima", description="Clima actual.", parameters={"type": "object", "properties": {"ciudad": {"type": "string"}}, "required": ["ciudad"]}),
+        types.FunctionDeclaration(name="agregar_tarea", description="Agrega tarea.", parameters={"type": "object", "properties": {"descripcion": {"type": "string"}, "fecha_limite": {"type": "string"}}, "required": ["descripcion"]}),
+        types.FunctionDeclaration(name="listar_tareas", description="Lista tareas.", parameters={"type": "object", "properties": {}}),
+        types.FunctionDeclaration(name="ejecutar_comando_seguro", description="Ejecuta comando seguro.", parameters={"type": "object", "properties": {"comando": {"type": "string"}}, "required": ["comando"]}),
+        types.FunctionDeclaration(name="enviar_email_real", description="Envía email.", parameters={"type": "object", "properties": {"destinatario": {"type": "string"}, "asunto": {"type": "string"}, "cuerpo": {"type": "string"}}, "required": ["destinatario", "asunto", "cuerpo"]}),
+        types.FunctionDeclaration(name="predimensionar_estructura", description="Predimensiona estructuras.", parameters={"type": "object", "properties": {"tipo": {"type": "string"}}, "required": ["tipo"]}),
+        types.FunctionDeclaration(name="controlar_dispositivo", description="Controla dispositivo HA.", parameters={"type": "object", "properties": {"entidad": {"type": "string"}, "accion": {"type": "string"}}, "required": ["entidad", "accion"]}),
+        types.FunctionDeclaration(name="leer_codigo", description="Lee archivo .py.", parameters={"type": "object", "properties": {"archivo": {"type": "string"}}, "required": ["archivo"]}),
+        types.FunctionDeclaration(name="buscar_en_web", description="Busca en internet.", parameters={"type": "object", "properties": {"consulta": {"type": "string"}, "num_resultados": {"type": "integer"}}, "required": ["consulta"]}),
+        types.FunctionDeclaration(name="investigar_tema", description="Investiga a fondo.", parameters={"type": "object", "properties": {"consulta": {"type": "string"}, "profundidad": {"type": "string"}}, "required": ["consulta"]}),
+        types.FunctionDeclaration(name="ejecutar_python_seguro", description="Ejecuta Python seguro.", parameters={"type": "object", "properties": {"codigo": {"type": "string"}, "timeout_segundos": {"type": "integer"}}, "required": ["codigo"]}),
+        types.FunctionDeclaration(name="obtener_cotizacion", description="Cotización de acción.", parameters={"type": "object", "properties": {"accion": {"type": "string"}}, "required": ["accion"]}),
+        types.FunctionDeclaration(name="traducir_texto", description="Traduce texto.", parameters={"type": "object", "properties": {"texto": {"type": "string"}, "idioma_destino": {"type": "string"}}, "required": ["texto"]}),
+        types.FunctionDeclaration(name="ejecutar_tarea_web", description="Controla navegador real.", parameters={"type": "object", "properties": {"tarea": {"type": "string"}, "url_inicial": {"type": "string"}}, "required": ["tarea"]}),
+        types.FunctionDeclaration(name="analizar_imagen", description="Analiza imagen con visión.", parameters={"type": "object", "properties": {"imagen_path": {"type": "string"}, "pregunta": {"type": "string"}}, "required": ["imagen_path", "pregunta"]}),
+        types.FunctionDeclaration(name="generar_diagrama_viga", description="Genera diagramas de cortante y momento.", parameters={"type": "object", "properties": {"longitud": {"type": "number"}, "cargas": {"type": "array"}, "tipo": {"type": "string"}}, "required": ["longitud"]}),
     ])
 ]
 
-# ---------- MODELOS DE GENERACIÓN ----------
+# ---------- MODELOS ----------
 modelos_generacion_cache = None
 modelos_generacion_blacklist = set()
 
@@ -1110,51 +864,31 @@ def cargar_modelos_generacion():
     global modelos_generacion_cache
     try:
         modelos = list(client.models.list())
-        modelos_gen = []
-        for m in modelos:
-            name = m.name
-            actions = str(m.supported_actions) if hasattr(m, 'supported_actions') else ''
-            if 'generateContent' in actions or 'gemini' in name.lower():
-                modelos_gen.append(name)
-        modelos_generacion_cache = modelos_gen
-        logger.info(f"Modelos de generación cargados: {modelos_gen}")
-        return modelos_gen
+        modelos_gen = [m.name for m in modelos if 'generateContent' in str(m.supported_actions) or 'gemini' in m.name.lower()]
+        modelos_generacion_cache = modelos_gen if modelos_gen else ["models/gemini-1.5-flash", "models/gemini-1.5-pro"]
+        logger.info(f"Modelos de generación cargados: {modelos_generacion_cache}")
     except Exception as e:
-        logger.error(f"Error al cargar modelos de generación: {e}")
-        modelos_generacion_cache = [
-            "models/gemini-1.5-pro",
-            "models/gemini-1.5-flash",
-            "models/gemini-2.0-flash-exp"
-        ]
-        logger.info(f"Usando fallback: {modelos_generacion_cache}")
-        return modelos_generacion_cache
+        logger.error(f"Error cargando modelos: {e}")
+        modelos_generacion_cache = ["models/gemini-1.5-flash", "models/gemini-1.5-pro"]
 
 def cargar_modelos_embedding():
     try:
         modelos = list(client.models.list())
-        modelos_emb = []
-        for m in modelos:
-            name = m.name
-            actions = str(m.supported_actions) if hasattr(m, 'supported_actions') else ''
-            if 'embedContent' in actions or 'embedding' in name.lower():
-                modelos_emb.append(name)
+        modelos_emb = [m.name for m in modelos if 'embedContent' in str(m.supported_actions) or 'embedding' in m.name.lower()]
         set_modelos_embedding(modelos_emb)
         logger.info(f"Modelos de embedding cargados: {modelos_emb}")
-        return modelos_emb
     except Exception as e:
-        logger.error(f"Error al cargar modelos de embedding: {e}")
-        return []
+        logger.error(f"Error cargando embeddings: {e}")
 
-# ---------- INSTANCIAS GLOBALES DE LOS NUEVOS MÓDULOS ----------
+# ---------- INSTANCIAS GLOBALES ----------
 planner = Planner(client)
 enhanced_memory = EnhancedMemory()
 tool_registry = ToolRegistry()
 tool_registry.register_batch(function_map)
 planner.set_tools(list(function_map.keys()))
 
-# ---------- FUNCIÓN PRINCIPAL MEJORADA ----------
+# ---------- FUNCIÓN PRINCIPAL ----------
 def generar_respuesta(mensaje, contexto="", historial=None):
-    # Buscar tareas similares en memoria
     tareas_similares = enhanced_memory.find_similar_tasks(mensaje)
     if tareas_similares:
         contexto_memoria = "\n[Recuerdo de tareas anteriores similares]:\n" + "\n".join([f"- {t[0]}: {t[1][:200]}" for t in tareas_similares])
@@ -1163,7 +897,6 @@ def generar_respuesta(mensaje, contexto="", historial=None):
         else:
             contexto = contexto_memoria
 
-    # Detectar tareas complejas (planificación)
     palabras_clave_complejas = ["y luego", "después", "primero", "segundo", "además", "también", "luego", "finalmente"]
     if any(p in mensaje.lower() for p in palabras_clave_complejas):
         plan = planner.planify(mensaje)
@@ -1181,21 +914,17 @@ def generar_respuesta(mensaje, contexto="", historial=None):
             enhanced_memory.save_task_result(mensaje, resultado_final)
             return resultado_final
 
-    # Si no requiere planificación, flujo normal (búsqueda web, etc.)
     mensaje_lower = mensaje.lower()
     necesita_busqueda = any(phrase in mensaje_lower for phrase in [
         "busca en internet", "investiga", "tendencias", "búsqueda web", "buscar en la web",
-        "qué hay de nuevo", "últimas noticias", "busca en la web", "encuentra información",
-        "qué es", "cómo funciona", "precio de", "cotización", "noticias de", "qué significa",
-        "teoría de", "historia de", "quién fue", "dónde está", "cuándo ocurrió", "buscar"
+        "qué hay de nuevo", "últimas noticias", "encuentra información", "qué es", "cómo funciona",
+        "precio de", "cotización", "noticias de", "qué significa", "teoría de", "historia de",
+        "quién fue", "dónde está", "cuándo ocurrió", "buscar"
     ])
-    
     if necesita_busqueda:
         resultado_busqueda = buscar_en_web_mejorada(mensaje, num_resultados=5)
-        contexto_web = f"\n\n[RESULTADOS REALES DE BÚSQUEDA WEB para '{mensaje}']:\n{resultado_busqueda}\n\nINSTRUCCIÓN: Usa EXCLUSIVAMENTE esta información para responder a Papá. No inventes datos. Si no hay resultados, dilo claramente.\n"
+        contexto_web = f"\n\n[RESULTADOS REALES DE BÚSQUEDA WEB para '{mensaje}']:\n{resultado_busqueda}\n\nINSTRUCCIÓN: Usa EXCLUSIVAMENTE esta información para responder a Papá.\n"
         mensaje = mensaje + contexto_web
-
-    global modelos_generacion_cache, modelos_generacion_blacklist
 
     contents = []
     if historial:
@@ -1204,29 +933,22 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                 contents.append(types.Content(role="user", parts=[types.Part(text=msg["content"])]))
             else:
                 contents.append(types.Content(role="model", parts=[types.Part(text=msg["content"])]))
-
-    if contexto:
-        prompt_completo = f"Contexto relevante:\n{contexto}\n\nMensaje actual: {mensaje}"
-    else:
-        prompt_completo = mensaje
+    prompt_completo = f"Contexto relevante:\n{contexto}\n\nMensaje actual: {mensaje}" if contexto else mensaje
     contents.append(types.Content(role="user", parts=[types.Part(text=prompt_completo)]))
 
     if modelos_generacion_cache is None:
         cargar_modelos_generacion()
-
     modelos_a_probar = [m for m in modelos_generacion_cache if m not in modelos_generacion_blacklist]
     if not modelos_a_probar:
-        return "Error: No hay modelos de generación disponibles. Verifica tu API key."
+        return "Error: No hay modelos de generación disponibles."
 
     for modelo_completo in modelos_a_probar:
         modelo = modelo_completo.replace('models/', '')
         try:
             logger.info(f"Intentando con modelo: {modelo}")
-            
             max_iteraciones = 3
             iteracion = 0
             current_contents = contents.copy()
-            
             while iteracion < max_iteraciones:
                 response = client.models.generate_content(
                     model=modelo,
@@ -1240,137 +962,73 @@ def generar_respuesta(mensaje, contexto="", historial=None):
                     ),
                     contents=current_contents
                 )
-                
                 if not response.function_calls:
                     if len(response.text) > 50:
                         enhanced_memory.save_task_result(mensaje, response.text[:1000])
                     return response.text
-                
                 function_responses = []
                 for fc in response.function_calls:
                     func_name = fc.name
                     func_args = fc.args
                     if func_name in function_map:
-                        resultado = function_map[func_name](**func_args)
-                        function_responses.append(
-                            types.Part.from_function_response(
-                                name=func_name,
-                                response={"result": resultado}
-                            )
-                        )
+                        res = function_map[func_name](**func_args)
+                        function_responses.append(types.Part.from_function_response(name=func_name, response={"result": res}))
                     else:
-                        function_responses.append(
-                            types.Part.from_function_response(
-                                name=func_name,
-                                response={"error": f"Función {func_name} no disponible"}
-                            )
-                        )
-                
-                current_contents.append(
-                    types.Content(
-                        role="model",
-                        parts=[types.Part.from_function_call(name=fc.name, args=fc.args) for fc in response.function_calls]
-                    )
-                )
-                current_contents.append(
-                    types.Content(role="function", parts=function_responses)
-                )
-                
+                        function_responses.append(types.Part.from_function_response(name=func_name, response={"error": f"Función {func_name} no disponible"}))
+                current_contents.append(types.Content(role="model", parts=[types.Part.from_function_call(name=fc.name, args=fc.args) for fc in response.function_calls]))
+                current_contents.append(types.Content(role="function", parts=function_responses))
                 iteracion += 1
-                
                 if iteracion >= max_iteraciones:
                     final_response = client.models.generate_content(
                         model=modelo,
-                        config=types.GenerateContentConfig(
-                            system_instruction=NUCLEO_ETERNA,
-                            temperature=0.8,
-                            max_output_tokens=2048,
-                        ),
+                        config=types.GenerateContentConfig(system_instruction=NUCLEO_ETERNA, temperature=0.8, max_output_tokens=2048),
                         contents=current_contents
                     )
                     enhanced_memory.save_task_result(mensaje, final_response.text[:1000])
                     return final_response.text
-            
-            return "Completé las operaciones pero no pude generar un resumen final. Intenta de nuevo."
-            
+            return "Completé las operaciones pero no pude generar un resumen final."
         except Exception as e:
             logger.error(f"Error con modelo {modelo}: {e}")
             modelos_generacion_blacklist.add(modelo_completo)
             continue
+    return "Error: No se pudo generar respuesta."
 
-    return "Error: No se pudo generar respuesta con ningún modelo disponible."
-
-# ---------- PLANIFICACIÓN (función original, se mantiene) ----------
+# ---------- PLANIFICACIÓN (legacy) ----------
 def planificar_y_ejecutar(objetivo):
     plan_prompt = f"""
 Eres ETERNA, una agente autónoma. Tu objetivo es: "{objetivo}"
-
-Descompón este objetivo en una secuencia de pasos. Cada paso debe ser una acción que puedas realizar con tus herramientas disponibles:
-- controlar_dispositivo(entidad, accion)
-- calcular_predimensionado_viga(longitud, carga)
-- guardar_reporte_txt(titulo, contenido)
-- consultar_clima(ciudad)
-- agregar_tarea(descripcion, fecha_limite)
-- listar_tareas()
-- ejecutar_comando_seguro(comando)
-- enviar_email_real(destinatario, asunto, cuerpo)
-- buscar_en_web_mejorada(consulta, num_resultados)
-- ejecutar_python_seguro(codigo, timeout_segundos)
-- obtener_cotizacion(accion)
-- traducir_texto(texto, idioma_destino)
-- ejecutar_tarea_web(tarea, url_inicial)
-- generar_imagen(descripcion)
-- analizar_imagen(imagen_path, pregunta)
-- generar_diagrama_viga(longitud, cargas, tipo)
-
-Devuelve los pasos en formato JSON, así:
-[
-    {{"herramienta": "controlar_dispositivo", "argumentos": {{"entidad": "light.sala", "accion": "apagar"}}}},
-    {{"herramienta": "consultar_clima", "argumentos": {{"ciudad": "Caracas"}}}}
-]
-Si no es posible descomponer, responde con un JSON vacío [].
+Descompón este objetivo en pasos usando tus herramientas.
+Devuelve JSON: [{{"herramienta": "nombre", "argumentos": {{...}}}}]
 """
     try:
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            config=types.GenerateContentConfig(temperature=0.2),
-            contents=[plan_prompt]
-        )
-        plan_text = response.text.strip()
-        start = plan_text.find('[')
-        end = plan_text.rfind(']') + 1
-        if start != -1 and end != 0:
-            plan_json = plan_text[start:end]
-            pasos = json.loads(plan_json)
-        else:
-            pasos = []
+        response = client.models.generate_content(model="gemini-1.5-flash", config=types.GenerateContentConfig(temperature=0.2), contents=[plan_prompt])
+        text = response.text.strip()
+        start = text.find('[')
+        end = text.rfind(']') + 1
+        pasos = json.loads(text[start:end]) if start != -1 and end != 0 else []
     except Exception as e:
         return f"Error al generar plan: {e}"
-
     if not pasos:
-        return "No pude descomponer el objetivo en pasos. Intenta ser más específico."
-
+        return "No pude descomponer el objetivo en pasos."
     resultados = []
     for paso in pasos:
         herramienta = paso.get("herramienta")
         args = paso.get("argumentos", {})
         if herramienta in function_map:
             try:
-                resultado = function_map[herramienta](**args)
-                resultados.append(f"Paso '{herramienta}': {resultado}")
+                res = function_map[herramienta](**args)
+                resultados.append(f"Paso '{herramienta}': {res}")
             except Exception as e:
                 resultados.append(f"Error en paso '{herramienta}': {e}")
         else:
             resultados.append(f"Herramienta '{herramienta}' no disponible")
-
     return "\n".join(resultados)
 
 # ---------- MEMORIA DE CHAT ----------
 def guardar_interaccion(role, content):
     ts = datetime.now().isoformat()
     with db_lock:
-        conn.execute("INSERT INTO memoria (timestamp, role, content) VALUES (?, ?, ?)",
-                     (ts, role, content))
+        conn.execute("INSERT INTO memoria (timestamp, role, content) VALUES (?, ?, ?)", (ts, role, content))
         conn.commit()
     if role == "assistant":
         guardar_embedding(content)
@@ -1388,13 +1046,9 @@ def enviar_alerta_telegram(mensaje):
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if token and chat_id:
         try:
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
-            requests.post(url, json={"chat_id": chat_id, "text": mensaje}, timeout=5)
-            logger.info(f"Alerta Telegram enviada: {mensaje[:50]}...")
+            requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": mensaje}, timeout=5)
         except Exception as e:
-            logger.error(f"Error enviando alerta Telegram: {e}")
-    else:
-        logger.debug("Telegram no configurado, alerta no enviada.")
+            logger.error(f"Error Telegram: {e}")
 
 def agente_background():
     while True:
@@ -1405,32 +1059,24 @@ def agente_background():
                 tareas = c.fetchall()
             for desc, fl in tareas:
                 if fl:
-                    try:
-                        dias_restantes = (datetime.strptime(fl, "%Y-%m-%d") - datetime.now()).days
-                        if dias_restantes <= 1:
-                            enviar_alerta_telegram(f"⚠️ Tarea próxima: '{desc}' vence el {fl} (en {dias_restantes} día(s)).")
-                    except:
-                        pass
+                    dias = (datetime.strptime(fl, "%Y-%m-%d") - datetime.now()).days
+                    if dias <= 1:
+                        enviar_alerta_telegram(f"⚠️ Tarea próxima: '{desc}' vence el {fl}")
             clima = consultar_clima("Caracas")
-            if "tormenta" in clima.lower() or "lluvia" in clima.lower() or "storm" in clima.lower():
+            if "tormenta" in clima.lower() or "lluvia" in clima.lower():
                 enviar_alerta_telegram(f"🌧️ Alerta climática: {clima}")
         except Exception as e:
-            logger.error(f"Error en agente_background: {e}")
+            logger.error(f"Error en agente: {e}")
         time.sleep(3600)
 
 def iniciar_agente():
-    hilo = threading.Thread(target=agente_background, daemon=True)
-    hilo.start()
+    threading.Thread(target=agente_background, daemon=True).start()
     logger.info("Agente de fondo iniciado.")
 
 iniciar_agente()
 
-# ---------- PUNTO DE ENTRADA PARA PRUEBAS ----------
+# ---------- PRUEBA ----------
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    print("Eterna Core EVOLUCIONADO con generación de diagramas estructurales. Probando...")
-    # Prueba de generación de diagrama
-    # respuesta = generar_diagrama_viga(8.0)
-    # print(respuesta)
-    respuesta = generar_respuesta("Primero busca en internet las tendencias de repostería 2026, luego guarda los resultados en un reporte llamado 'tendencias'")
-    print(respuesta)
+    print("Eterna Core con diagramas y visión. Probando...")
+    print(generar_respuesta("Genera un diagrama de viga de 6 metros"))
