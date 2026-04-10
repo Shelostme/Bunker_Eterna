@@ -1,5 +1,6 @@
 streamlit>=1.35.0
-google-genai>=1.65.0
+google-genai==1.65.0
+google-auth==2.48.0
 faiss-cpu
 numpy>=1.24.0
 requests
@@ -7,10 +8,11 @@ python-dotenv
 google
 duckduckgo-search
 yfinance
-browser-use
+browser-use==0.12.6
 playwright
 langchain
 langchain-google-genai
 nest-asyncio
 matplotlib
 deep-translator
+protobuf>=3.19.0
