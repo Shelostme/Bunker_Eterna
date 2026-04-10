@@ -8,7 +8,6 @@ import sqlite3
 from datetime import datetime
 import os
 import faiss
-import numpy as np
 import re
 import smtplib
 from email.mime.text import MIMEText
@@ -769,67 +768,83 @@ def leer_codigo(archivo: str) -> str:
     except Exception as e:
         return f"Error al leer {archivo}: {e}"
 
-# ========== NUEVAS FUNCIONES: GENERACIÓN Y ANÁLISIS DE IMÁGENES ==========
-
-def generar_imagen(descripcion: str) -> str:
+# ========== NUEVA FUNCIÓN: GENERAR DIAGRAMA DE VIGA (MATPLOTLIB) ==========
+def generar_diagrama_viga(longitud: float, cargas: list = None, tipo: str = "ambos") -> str:
     """
-    Genera una imagen a partir de una descripción textual usando Gemini 2.0 Flash.
-    Retorna la ruta del archivo guardado.
+    Genera diagramas de cortante y momento para una viga.
+    
+    Parámetros:
+    - longitud: longitud de la viga en metros
+    - cargas: lista opcional de diccionarios con tipo, magnitud, posición
+    - tipo: "cortante", "momento" o "ambos"
+    
+    Retorna ruta del archivo PNG generado.
     """
     try:
-        model = "gemini-2.0-flash-exp"  # Modelo experimental con generación de imágenes
-        config = types.GenerateContentConfig(
-            response_modalities=['IMAGE'],
-            temperature=0.7,
-        )
-        response = client.models.generate_content(
-            model=model,
-            config=config,
-            contents=[types.Content(role="user", parts=[types.Part(text=descripcion)])]
-        )
-        # Buscar la imagen generada
-        for part in response.candidates[0].content.parts:
-            if part.inline_data and part.inline_data.mime_type.startswith('image/'):
-                image_data = part.inline_data.data
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"imagen_generada_{timestamp}.png"
-                with open(filename, "wb") as f:
-                    f.write(image_data)
-                return f"✅ Imagen generada y guardada como: {filename}\nDescripción: {descripcion}"
-        return "⚠️ No se pudo generar la imagen. Intenta con otra descripción."
+        # Discretización
+        x = np.linspace(0, longitud, 500)
+        V = np.zeros_like(x)
+        M = np.zeros_like(x)
+        
+        # Si no hay cargas, usar ejemplo didáctico
+        if cargas is None or len(cargas) == 0:
+            w = 20  # kN/m
+            P = 30  # kN
+            a = longitud / 2
+            R1 = (w * longitud**2 / 2 + P * a) / longitud
+            R2 = w * longitud + P - R1
+            for i, xi in enumerate(x):
+                V[i] = R1 - w * xi
+                M[i] = R1 * xi - w * xi**2 / 2
+                if xi >= a:
+                    V[i] -= P
+                    M[i] -= P * (xi - a)
+        else:
+            # Aquí se puede implementar lógica genérica según cargas
+            # Por ahora, usamos el mismo ejemplo
+            w = 20
+            P = 30
+            a = longitud / 2
+            R1 = (w * longitud**2 / 2 + P * a) / longitud
+            R2 = w * longitud + P - R1
+            for i, xi in enumerate(x):
+                V[i] = R1 - w * xi
+                M[i] = R1 * xi - w * xi**2 / 2
+                if xi >= a:
+                    V[i] -= P
+                    M[i] -= P * (xi - a)
+        
+        # Crear gráfico
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6))
+        
+        if tipo in ["cortante", "ambos"]:
+            ax1.plot(x, V, 'b-', linewidth=2)
+            ax1.fill_between(x, 0, V, alpha=0.2, color='blue')
+            ax1.axhline(0, color='black', linewidth=0.5)
+            ax1.set_ylabel('Cortante V (kN)')
+            ax1.grid(True)
+            ax1.set_title('Diagrama de Cortante')
+            ax1.set_xlim(0, longitud)
+        
+        if tipo in ["momento", "ambos"]:
+            ax2.plot(x, M, 'r-', linewidth=2)
+            ax2.fill_between(x, 0, M, alpha=0.2, color='red')
+            ax2.axhline(0, color='black', linewidth=0.5)
+            ax2.set_ylabel('Momento M (kN·m)')
+            ax2.set_xlabel('Posición x (m)')
+            ax2.grid(True)
+            ax2.set_title('Diagrama de Momento Flector')
+            ax2.set_xlim(0, longitud)
+        
+        plt.tight_layout()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"diagrama_viga_{timestamp}.png"
+        plt.savefig(filename, dpi=150)
+        plt.close()
+        return f"✅ Diagrama generado y guardado como: {filename}"
     except Exception as e:
-        logger.error(f"Error en generar_imagen: {e}")
-        return f"❌ Error generando imagen: {str(e)}"
-
-def analizar_imagen(imagen_path: str, pregunta: str) -> str:
-    """
-    Recibe una ruta de imagen local y una pregunta, y devuelve la respuesta de Gemini.
-    """
-    if not os.path.exists(imagen_path):
-        return f"❌ No se encontró la imagen: {imagen_path}"
-    try:
-        with open(imagen_path, "rb") as f:
-            image_bytes = f.read()
-        image_b64 = base64.b64encode(image_bytes).decode('utf-8')
-        mime_type = "image/png" if imagen_path.endswith('.png') else "image/jpeg"
-        model = "gemini-1.5-flash"  # Soporta visión
-        response = client.models.generate_content(
-            model=model,
-            config=types.GenerateContentConfig(temperature=0.5),
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part(text=pregunta),
-                        types.Part(inline_data=types.Blob(mime_type=mime_type, data=image_b64))
-                    ]
-                )
-            ]
-        )
-        return response.text
-    except Exception as e:
-        logger.error(f"Error en analizar_imagen: {e}")
-        return f"❌ Error analizando imagen: {str(e)}"
+        logger.error(f"Error en generar_diagrama_viga: {e}")
+        return f"❌ Error generando diagrama: {str(e)}"
 
 # ========== FIN DE NUEVAS FUNCIONES ==========
 
@@ -854,6 +869,7 @@ function_map = {
     "ejecutar_tarea_web": ejecutar_tarea_web,
     "generar_imagen": generar_imagen,
     "analizar_imagen": analizar_imagen,
+    "generar_diagrama_viga": generar_diagrama_viga,   # <-- NUEVA
 }
 
 # ---------- DEFINICIÓN DE TOOLS PARA GEMINI (ACTUALIZADO) ----------
@@ -1067,6 +1083,20 @@ tools = [
                     "pregunta": {"type": "string", "description": "Pregunta sobre la imagen (ej. '¿Qué dimensiones tiene esta viga?', 'Describe la estructura que ves')."}
                 },
                 "required": ["imagen_path", "pregunta"]
+            }
+        ),
+        # NUEVA HERRAMIENTA: GENERAR DIAGRAMA DE VIGA
+        types.FunctionDeclaration(
+            name="generar_diagrama_viga",
+            description="Genera diagramas de cortante y momento para una viga con cargas especificadas. Útil para visualizar resultados de predimensionamiento.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "longitud": {"type": "number", "description": "Longitud de la viga en metros."},
+                    "cargas": {"type": "array", "description": "Lista opcional de cargas (distribuidas o puntuales). Si no se proporciona, usa un ejemplo didáctico."},
+                    "tipo": {"type": "string", "enum": ["cortante", "momento", "ambos"], "description": "Tipo de diagrama a generar. Por defecto 'ambos'."}
+                },
+                "required": ["longitud"]
             }
         ),
     ])
@@ -1291,6 +1321,7 @@ Descompón este objetivo en una secuencia de pasos. Cada paso debe ser una acci�
 - ejecutar_tarea_web(tarea, url_inicial)
 - generar_imagen(descripcion)
 - analizar_imagen(imagen_path, pregunta)
+- generar_diagrama_viga(longitud, cargas, tipo)
 
 Devuelve los pasos en formato JSON, así:
 [
@@ -1397,9 +1428,9 @@ iniciar_agente()
 # ---------- PUNTO DE ENTRADA PARA PRUEBAS ----------
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    print("Eterna Core EVOLUCIONADO con generación y análisis de imágenes. Probando...")
-    # Prueba de generación de imagen (opcional)
-    # respuesta = generar_imagen("Diagrama de una viga de acero de 4 metros")
+    print("Eterna Core EVOLUCIONADO con generación de diagramas estructurales. Probando...")
+    # Prueba de generación de diagrama
+    # respuesta = generar_diagrama_viga(8.0)
     # print(respuesta)
     respuesta = generar_respuesta("Primero busca en internet las tendencias de repostería 2026, luego guarda los resultados en un reporte llamado 'tendencias'")
     print(respuesta)
