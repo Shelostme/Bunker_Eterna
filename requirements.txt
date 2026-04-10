@@ -17,3 +17,5 @@ browser-use
 langchain-google-genai
 playwright
 nest-asyncio
+matplotlib
+numpy
