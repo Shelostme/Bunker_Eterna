@@ -1,4 +1,6 @@
 # eterna_core.py
+import matplotlib.pyplot as plt
+import numpy as np
 from predimensionamiento import predimensionar_estructura
 import requests
 import json
