@@ -9,10 +9,7 @@ from eterna_core import (
     reiniciar_indice_faiss,
     cargar_modelos_embedding,
     cargar_modelos_generacion,
-    analizar_imagen,      # <--- NUEVO
-    generar_imagen,       # <--- NUEVO
 )
-import tempfile
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -62,49 +59,7 @@ with st.expander("🛠️ Mantenimiento de memoria", expanded=False):
         st.success(resultado)
         st.rerun()
 
-# ========== NUEVA SECCIÓN: VISIÓN Y GENERACIÓN DE IMÁGENES ==========
-st.header("🖼️ Visión y Generación de Imágenes (Jarvis)")
-
-tab1, tab2 = st.tabs(["📤 Analizar imagen", "🎨 Generar imagen"])
-
-with tab1:
-    st.subheader("Sube una imagen y hazle una pregunta")
-    uploaded_file = st.file_uploader("Elige una imagen...", type=["png", "jpg", "jpeg"])
-    pregunta = st.text_input("Pregunta sobre la imagen:", "¿Qué elementos estructurales ves?")
-    if st.button("🔍 Analizar imagen", key="analizar_btn"):
-        if uploaded_file is not None:
-            # Guardar la imagen temporalmente
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
-                tmp_file.write(uploaded_file.getvalue())
-                tmp_path = tmp_file.name
-            with st.spinner("Eterna está observando la imagen..."):
-                respuesta = analizar_imagen(tmp_path, pregunta)
-            st.success("Análisis completado:")
-            st.write(respuesta)
-            # Limpiar archivo temporal
-            os.unlink(tmp_path)
-        else:
-            st.warning("Por favor, sube una imagen primero.")
-
-with tab2:
-    st.subheader("Describe la imagen que quieres generar")
-    descripcion = st.text_area("Descripción detallada:", "Diagrama de una viga de concreto armado de 5 metros con carga puntual en el centro, estilo técnico")
-    if st.button("🎨 Generar imagen", key="generar_btn"):
-        with st.spinner("Eterna está dibujando..."):
-            respuesta = generar_imagen(descripcion)
-        st.success("Imagen generada:")
-        st.write(respuesta)
-        # Si la respuesta contiene la ruta del archivo, mostrarla
-        if "imagen_generada_" in respuesta:
-            import re
-            match = re.search(r'imagen_generada_\d+\.png', respuesta)
-            if match:
-                img_path = match.group()
-                if os.path.exists(img_path):
-                    st.image(img_path, caption="Imagen generada por Eterna")
-# ========== FIN DE LA NUEVA SECCIÓN ==========
-
-# ---------- CHAT (sin cambios) ----------
+# ---------- CHAT ----------
 if "mensajes" not in st.session_state:
     st.session_state.mensajes = []
 
