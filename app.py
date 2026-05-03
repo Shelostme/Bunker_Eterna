@@ -59,7 +59,6 @@ with st.expander("🛠️ Mantenimiento de memoria", expanded=False):
         st.success(resultado)
         st.rerun()
 
-# ---------- CHAT ----------
 if "mensajes" not in st.session_state:
     st.session_state.mensajes = []
 
